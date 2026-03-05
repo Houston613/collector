@@ -19,7 +19,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent("http://localhost:8080")
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
 	a.MetricsCollect()
 
 	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
@@ -47,7 +47,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent("http://localhost:8080")
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -70,7 +70,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent("http://localhost:8080")
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -84,7 +84,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 }
 
 func TestMetricsCollect_RandomValueInRange(t *testing.T) {
-	a := NewAgent("http://localhost:8080")
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
 	a.MetricsCollect()
 
 	v := a.gaugesMetrics["RandomValue"]
@@ -122,7 +122,7 @@ func TestMetricsSend_URLFormat(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			a := NewAgent(srv.URL)
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval)
 			a.mu.Lock()
 			//копируем тестовые данные в структуру агента, чтобы при отправке данных были именно эти данные
 			maps.Copy(a.gaugesMetrics, tt.gauges)

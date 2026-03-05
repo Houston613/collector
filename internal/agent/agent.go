@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	PollInterval   = 2 * time.Second
-	ReportInterval = 10 * time.Second
+	DefaultServerAddress    = "localhost:8080"
+	DefaultPollInterval   = 2 * time.Second
+	DefaultReportInterval = 10 * time.Second
 )
 
 type Agent struct {
@@ -22,14 +23,18 @@ type Agent struct {
 	gaugesMetrics   map[string]float64
 	countersMetrics map[string]int64
 	addr            string
+	pollInterval    time.Duration
+	reportInterval  time.Duration
 	client          *http.Client
 }
 
-func NewAgent(addr string) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
 		addr:            addr,
+		pollInterval:    pollInterval,
+		reportInterval:  reportInterval,
 		client:          &http.Client{},
 	}
 }
@@ -126,12 +131,12 @@ func (a *Agent) Run() {
 	go func() {
 		for {
 			a.MetricsCollect()
-			time.Sleep(PollInterval)
+			time.Sleep(a.pollInterval)
 		}
 	}()
 
 	for {
-		time.Sleep(ReportInterval)
+		time.Sleep(a.reportInterval)
 		a.MetricsSend()
 	}
 }
