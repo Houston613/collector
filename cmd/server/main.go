@@ -3,20 +3,18 @@ package main
 import (
 	"collector/internal/handler"
 	"collector/internal/repository"
-	"net/http"
+
+	"github.com/labstack/echo/v4"
 )
 
 func main() {
-
-	
 	storage := repository.NewStructMem()
 
-	mux := http.NewServeMux()
+	e := echo.New()
 
-	mux.HandleFunc("POST /update/{type}/{name}/{value}", handler.UpdateMetrics(storage))
-
-	err := http.ListenAndServe(":8080", mux)
-	if err != nil {
-		panic(err)
+	metricsHandler := handler.NewMetricsHandler(storage)
+	metricsHandler.RegisterRoutes(e)
+	if err := e.Start(":8080"); err != nil {
+		e.Logger.Fatal(err)
 	}
 }

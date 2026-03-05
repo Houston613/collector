@@ -8,6 +8,10 @@ type StructMem struct {
 type MemRepository interface {
 	UpdateGauge(name string, value float64)
 	UpdateCounter(name string, value int64)
+	GetGauge(name string) (float64, bool)
+	GetCounter(name string) (int64, bool)
+	GetAllGauges() map[string]float64
+	GetAllCounters() map[string]int64
 }
 
 func NewStructMem() *StructMem {
@@ -33,4 +37,12 @@ func (m *StructMem) GetGauge(name string) (float64, bool) {
 func (m *StructMem) GetCounter(name string) (int64, bool) {
 	v, ok := m.counters[name]
 	return v, ok
+}
+
+func (m *StructMem) GetAllGauges() map[string]float64 {
+	return m.gauges
+}
+
+func (m *StructMem) GetAllCounters() map[string]int64 {
+	return m.counters
 }
