@@ -2,6 +2,7 @@ package handler
 
 import (
 	"collector/internal/repository"
+	models "collector/internal/model"
 	"fmt"
 	"mime"
 	"net/http"
@@ -95,9 +96,60 @@ func ListMetrics(repo repository.MemRepository) echo.HandlerFunc {
 		return c.HTML(http.StatusOK, sb.String())
 	}
 }
+func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
+	var m models.Metrics
+	if err := c.Bind(&m); err != nil {
+		return c.JSON(http.StatusBadRequest, "не удалось распарсить JSON")
+	}
+
+	switch m.MType {
+	case models.Gauge:
+		if m.Value == nil {
+			return c.JSON(http.StatusBadRequest, "value обязательно для gauge")
+		}
+		h.repo.UpdateGauge(m.ID, *m.Value)
+	case models.Counter:
+		if m.Delta == nil {
+			return c.JSON(http.StatusBadRequest, "delta обязательно для counter")
+		}
+		h.repo.UpdateCounter(m.ID, *m.Delta)
+	default:
+		return c.JSON(http.StatusBadRequest, "неверный тип метрики")
+	}
+
+	return c.JSON(http.StatusOK, m)
+}
+
+// GetMetricJSON принимает JSON с ID и MType, возвращает JSON с заполненным значением.
+func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
+	var m models.Metrics
+	if err := c.Bind(&m); err != nil {
+		return c.JSON(http.StatusBadRequest, "не удалось прочитать JSON")
+	}
+	switch m.MType {
+	case models.Gauge:
+		val, ok := h.repo.GetGauge(m.ID)
+		if !ok {
+			return c.JSON(http.StatusNotFound, "метрика не найдена")
+		}
+		m.Value = &val
+	case models.Counter:
+		val, ok := h.repo.GetCounter(m.ID)
+		if !ok {
+			return c.JSON(http.StatusNotFound, "метрика не найдена")
+		}
+		m.Delta = &val
+	default:
+		return c.JSON(http.StatusNotFound, "неизвестный тип метрики")
+	}
+
+	return c.JSON(http.StatusOK, m)
+}
 
 func (h *MetricsHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/update/:type/:name/:value", h.UpdateMetrics)
+	e.POST("/update", h.UpdateMetricJSON)
+	e.POST("/value", h.GetMetricJSON)
 	e.GET("/value/:type/:name", GetMetric(h.repo))
 	e.GET("/", ListMetrics(h.repo))
 }

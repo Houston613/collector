@@ -1,15 +1,18 @@
 package agent
 
 import (
-	"maps"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"math/rand"
 	"net/http"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
+
+	models "collector/internal/model"
 )
 
 const (
@@ -81,40 +84,42 @@ func (a *Agent) MetricsCollect() {
 
 
 func (a *Agent) MetricsSend() {
-	//сналчала копируем данные в локальные переменные, чтобы не держать блокировку на время отправки данных
+	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
 	maps.Copy(gauges, a.gaugesMetrics)
 	counters := make(map[string]int64, len(a.countersMetrics))
 	maps.Copy(counters, a.countersMetrics)
-	//отпускаем блокировку
 	a.mu.RUnlock()
-	//отправляем данные
+
 	for name, value := range gauges {
-		url := fmt.Sprintf(
-			"%s/update/gauge/%s/%s",
-			a.addr, name,
-			strconv.FormatFloat(value, 'g', -1, 64),
-		)
-		if err := a.sendRequest(url); err != nil {
+		v := value
+		m := models.Metrics{ID: name, MType: models.Gauge, Value: &v}
+		if err := a.sendJSON(m); err != nil {
 			log.Printf("error sending gauge %s: %v", name, err)
 		}
 	}
 
 	for name, value := range counters {
-		url := fmt.Sprintf("%s/update/counter/%s/%d", a.addr, name, value)
-		if err := a.sendRequest(url); err != nil {
+		v := value
+		m := models.Metrics{ID: name, MType: models.Counter, Delta: &v}
+		if err := a.sendJSON(m); err != nil {
 			log.Printf("error sending counter %s: %v", name, err)
 		}
 	}
 }
 
-func (a *Agent) sendRequest(url string) error {
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+func (a *Agent) sendJSON(m models.Metrics) error {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
