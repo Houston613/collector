@@ -19,6 +19,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Переменная окружения имеет приоритет над флагом
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		*addr = envAddr
+	}
+
 	storage := repository.NewStructMem()
 
 	e := echo.New()
