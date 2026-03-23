@@ -2,12 +2,15 @@ package main
 
 import (
 	"collector/internal/handler"
+	"collector/internal/middleware"
 	"collector/internal/repository"
 	"flag"
 	"fmt"
 	"os"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
@@ -24,12 +27,29 @@ func main() {
 		*addr = envAddr
 	}
 
+	// Собираем логгер
+	cfg := zap.NewProductionEncoderConfig()
+	cfg.TimeKey = "timestamp"
+	cfg.EncodeLevel = zapcore.CapitalLevelEncoder
+	cfg.EncodeCaller = zapcore.ShortCallerEncoder
+	cfg.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	log := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(cfg),
+		zapcore.AddSync(os.Stdout),
+		zapcore.InfoLevel,
+	))
+	defer log.Sync()
+
 	storage := repository.NewStructMem()
 
 	e := echo.New()
+	//логгер должен быть реализован через middleware
+	e.Use(middleware.RequestLogger(log))
+
 	metricsHandler := handler.NewMetricsHandler(storage)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
-		e.Logger.Fatal(err)
+		log.Fatal("сервер завершил работу с ошибкой", zap.Error(err))
 	}
 }
