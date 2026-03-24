@@ -2,9 +2,9 @@ package agent
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"log"
 	"maps"
 	"math/rand"
 	"net/http"
@@ -13,6 +13,8 @@ import (
 	"time"
 
 	models "collector/internal/model"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -29,9 +31,10 @@ type Agent struct {
 	pollInterval    time.Duration
 	reportInterval  time.Duration
 	client          *http.Client
+	log             *zap.Logger
 }
 
-func NewAgent(addr string, pollInterval, reportInterval time.Duration) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
@@ -39,6 +42,8 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration) *Agent {
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
 		client:          &http.Client{},
+		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
+		log:             log,
 	}
 }
 
@@ -96,7 +101,7 @@ func (a *Agent) MetricsSend() {
 		v := value
 		m := models.Metrics{ID: name, MType: models.Gauge, Value: &v}
 		if err := a.sendJSON(m); err != nil {
-			log.Printf("error sending gauge %s: %v", name, err)
+			a.log.Error("error sending gauge", zap.String("name", name), zap.Error(err))
 		}
 	}
 
@@ -104,7 +109,7 @@ func (a *Agent) MetricsSend() {
 		v := value
 		m := models.Metrics{ID: name, MType: models.Counter, Delta: &v}
 		if err := a.sendJSON(m); err != nil {
-			log.Printf("error sending counter %s: %v", name, err)
+			a.log.Error("error sending counter", zap.String("name", name), zap.Error(err))
 		}
 	}
 }
@@ -115,11 +120,26 @@ func (a *Agent) sendJSON(m models.Metrics) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", bytes.NewReader(body))
+	// Сжимаем тело запроса в формат gzip
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return fmt.Errorf("gzip writer: %w", err)
+	}
+	if _, err = gz.Write(body); err != nil {
+		return fmt.Errorf("gzip write: %w", err)
+	}
+	if err = gz.Close(); err != nil {
+		return fmt.Errorf("gzip close: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
 
 	resp, err := a.client.Do(req)
 	if err != nil {

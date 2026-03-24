@@ -7,6 +7,9 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func main() {
@@ -40,11 +43,26 @@ func main() {
 		}
 	}
 
+	// Собираем логгер
+	cfg := zap.NewProductionEncoderConfig()
+	cfg.TimeKey = "timestamp"
+	cfg.EncodeLevel = zapcore.CapitalLevelEncoder
+	cfg.EncodeCaller = zapcore.ShortCallerEncoder
+	cfg.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	log := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(cfg),
+		zapcore.AddSync(os.Stdout),
+		zapcore.InfoLevel,
+	))
+	defer log.Sync()
+
 	a := agent.NewAgent(
 		//передаем только URL, сами решаем, что это будет http
 		"http://"+*addr,
 		time.Duration(*pollInterval)*time.Second,
 		time.Duration(*reportInterval)*time.Second,
+		log,
 	)
 	a.Run()
 }

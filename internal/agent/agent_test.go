@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"maps"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestMetricsCollect_PopulatesGauges(t *testing.T) {
@@ -24,7 +26,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 	a.MetricsCollect()
 
 	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
@@ -52,7 +54,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -75,7 +77,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -89,7 +91,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 }
 
 func TestMetricsCollect_RandomValueInRange(t *testing.T) {
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 	a.MetricsCollect()
 
 	v := a.gaugesMetrics["RandomValue"]
@@ -134,8 +136,17 @@ func TestMetricsSend_JSONFormat(t *testing.T) {
 				assert.Equal(t, "/update", r.URL.Path)
 				assert.Equal(t, http.MethodPost, r.Method)
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+				// Проверяем, что клиент поддерживает gzip-ответы
+				var reader io.Reader = r.Body
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					gr, err := gzip.NewReader(r.Body)
+					require.NoError(t, err)
+					defer gr.Close()
+					reader = gr
+				}
 
-				body, err := io.ReadAll(r.Body)
+				body, err := io.ReadAll(reader)
 				require.NoError(t, err)
 
 				var m models.Metrics
@@ -146,7 +157,8 @@ func TestMetricsSend_JSONFormat(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval)
+			//NewNop - это заглушка для логгера, которая не будет ничего выводить. Это полезно в тестах, чтобы не засорять вывод.
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			a.mu.Lock()
 			maps.Copy(a.gaugesMetrics, tt.gauges)
 			maps.Copy(a.countersMetrics, tt.counters)

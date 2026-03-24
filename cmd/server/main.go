@@ -50,6 +50,7 @@ func main() {
 	e.Pre(echomiddleware.RemoveTrailingSlash())
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
+	e.Use(middleware.GzipMiddleware(log))
 
 	metricsHandler := handler.NewMetricsHandler(storage)
 	metricsHandler.RegisterRoutes(e)
