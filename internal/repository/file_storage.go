@@ -5,30 +5,44 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+
+	"go.uber.org/zap"
 )
 
-//переиспользуем StructMem, чтобы не дублировать код по работе с метриками в памяти
+// переиспользуем StructMem, чтобы не дублировать код по работе с метриками в памяти
 type FileBackedStorage struct {
 	*StructMem
 	filePath string
+	syncMode bool // true → сохранять на диск после каждой записи (storeInterval == 0)
 	fileMu   sync.Mutex
+	log      *zap.Logger
 }
 
-func NewFileBackedStorage(filePath string) *FileBackedStorage {
+func NewFileBackedStorage(filePath string, syncMode bool, log *zap.Logger) *FileBackedStorage {
 	return &FileBackedStorage{
 		StructMem: NewStructMem(),
 		filePath:  filePath,
+		syncMode:  syncMode,
+		log:       log,
 	}
 }
 
 func (f *FileBackedStorage) UpdateGauge(name string, value float64) {
 	f.StructMem.UpdateGauge(name, value)
-	f.Save()
+	if f.syncMode {
+		if err := f.Save(); err != nil {
+			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+		}
+	}
 }
 
 func (f *FileBackedStorage) UpdateCounter(name string, value int64) {
 	f.StructMem.UpdateCounter(name, value)
-	f.Save()
+	if f.syncMode {
+		if err := f.Save(); err != nil {
+			f.log.Error("не удалость синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+		}
+	}
 }
 
 // Save сериализует все текущие метрики в JSON и записывает в файл.

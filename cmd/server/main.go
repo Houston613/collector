@@ -64,7 +64,7 @@ func main() {
 	var storage repository.MemRepository
 
 	if *fileStoragePath != "" {
-		fileStorage := repository.NewFileBackedStorage(*fileStoragePath)
+		fileStorage := repository.NewFileBackedStorage(*fileStoragePath, *storeInterval == 0, log)
 
 		if *restore {
 			if err := fileStorage.Load(); err != nil {
