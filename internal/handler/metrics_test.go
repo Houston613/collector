@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	models "collector/internal/model"
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -176,4 +180,192 @@ func TestGetMetric_CounterFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "10", rec.Body.String())
+}
+
+func jsonBody(t *testing.T, v any) *strings.Reader {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return strings.NewReader(string(b))
+}
+
+func jsonRequest(method, target string, body *strings.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestUpdateMetricJSON_GaugeOK(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	val := 27.54
+	body := jsonBody(t, models.Metrics{ID: "Alloc", MType: models.Gauge, Value: &val})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	stored, ok := repo.gauges["Alloc"]
+	require.True(t, ok)
+	assert.Equal(t, 27.54, stored)
+}
+
+func TestUpdateMetricJSON_CounterOK(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	delta := int64(10)
+	body := jsonBody(t, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	stored, ok := repo.counters["PollCount"]
+	require.True(t, ok)
+	assert.Equal(t, int64(10), stored)
+}
+
+func TestUpdateMetricJSON_CounterAccumulates(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	for _, d := range []int64{10, 20, 5} {
+		delta := d
+		body := jsonBody(t, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+		e.ServeHTTP(httptest.NewRecorder(), jsonRequest(http.MethodPost, "/update", body))
+	}
+
+	assert.Equal(t, int64(35), repo.counters["PollCount"])
+}
+
+func TestUpdateMetricJSON_ResponseContainsMetric(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	val := 123.456
+	body := jsonBody(t, models.Metrics{ID: "HeapAlloc", MType: models.Gauge, Value: &val})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got models.Metrics
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "HeapAlloc", got.ID)
+	assert.Equal(t, models.Gauge, got.MType)
+	require.NotNil(t, got.Value)
+	assert.Equal(t, 123.456, *got.Value)
+}
+
+func TestUpdateMetricJSON_MissingGaugeValue(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "Alloc", MType: models.Gauge})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUpdateMetricJSON_MissingCounterDelta(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "PollCount", MType: models.Counter})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUpdateMetricJSON_InvalidType(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "x", MType: "histogram"})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/update", body))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUpdateMetricJSON_InvalidJSON(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	req := jsonRequest(http.MethodPost, "/update", strings.NewReader(`not-json`))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestGetMetricJSON_GaugeFound(t *testing.T) {
+	repo := newMockRepo()
+	repo.gauges["LastGC"] = 1744184459
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "LastGC", MType: models.Gauge})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/value", body))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	var got models.Metrics
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "LastGC", got.ID)
+	assert.Equal(t, models.Gauge, got.MType)
+	require.NotNil(t, got.Value)
+	assert.Equal(t, float64(1744184459), *got.Value)
+}
+
+func TestGetMetricJSON_CounterFound(t *testing.T) {
+	repo := newMockRepo()
+	repo.counters["PollCount"] = 42
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "PollCount", MType: models.Counter})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/value", body))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got models.Metrics
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	assert.Equal(t, "PollCount", got.ID)
+	require.NotNil(t, got.Delta)
+	assert.Equal(t, int64(42), *got.Delta)
+}
+
+func TestGetMetricJSON_NotFound(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "Unknown", MType: models.Gauge})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/value", body))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestGetMetricJSON_InvalidType(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	body := jsonBody(t, models.Metrics{ID: "x", MType: "histogram"})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/value", body))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestGetMetricJSON_InvalidJSON(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	req := jsonRequest(http.MethodPost, "/value", strings.NewReader(`not-json`))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

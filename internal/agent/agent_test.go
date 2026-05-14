@@ -1,12 +1,19 @@
 package agent
 
 import (
+	"compress/gzip"
+	"encoding/json"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	models "collector/internal/model"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestMetricsCollect_PopulatesGauges(t *testing.T) {
@@ -19,7 +26,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 	a.MetricsCollect()
 
 	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
@@ -47,7 +54,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -70,7 +77,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -84,7 +91,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 }
 
 func TestMetricsCollect_RandomValueInRange(t *testing.T) {
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval)
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 	a.MetricsCollect()
 
 	v := a.gaugesMetrics["RandomValue"]
@@ -92,46 +99,74 @@ func TestMetricsCollect_RandomValueInRange(t *testing.T) {
 	assert.Less(t, v, 1.0, "RandomValue should be < 1")
 }
 
-func TestMetricsSend_URLFormat(t *testing.T) {
+func TestMetricsSend_JSONFormat(t *testing.T) {
 	tests := []struct {
-		name         string
-		gauges       map[string]float64
-		counters     map[string]int64
-		expectedPath string
+		name     string
+		gauges   map[string]float64
+		counters map[string]int64
+		want     models.Metrics
 	}{
 		{
-			name:         "gauge",
-			gauges:       map[string]float64{"TestGauge": 27.54},
-			counters:     map[string]int64{},
-			expectedPath: "/update/gauge/TestGauge/27.54",
+			name:     "gauge",
+			gauges:   map[string]float64{"TestGauge": 27.54},
+			counters: map[string]int64{},
+			want: models.Metrics{
+				ID:    "TestGauge",
+				MType: models.Gauge,
+				Value: func() *float64 { v := 27.54; return &v }(),
+			},
 		},
 		{
-			name:         "counter",
-			gauges:       map[string]float64{},
-			counters:     map[string]int64{"TestCounter": 17},
-			expectedPath: "/update/counter/TestCounter/17",
+			name:     "counter",
+			gauges:   map[string]float64{},
+			counters: map[string]int64{"TestCounter": 17},
+			want: models.Metrics{
+				ID:    "TestCounter",
+				MType: models.Counter,
+				Delta: func() *int64 { v := int64(17); return &v }(),
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var paths []string
+			var received []models.Metrics
+
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				paths = append(paths, r.URL.Path)
+				assert.Equal(t, "/update", r.URL.Path)
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+				// Проверяем, что клиент поддерживает gzip-ответы
+				var reader io.Reader = r.Body
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					gr, err := gzip.NewReader(r.Body)
+					require.NoError(t, err)
+					defer gr.Close()
+					reader = gr
+				}
+
+				body, err := io.ReadAll(reader)
+				require.NoError(t, err)
+
+				var m models.Metrics
+				require.NoError(t, json.Unmarshal(body, &m))
+				received = append(received, m)
+
 				w.WriteHeader(http.StatusOK)
 			}))
 			defer srv.Close()
 
-			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval)
+			//NewNop - это заглушка для логгера, которая не будет ничего выводить. Это полезно в тестах, чтобы не засорять вывод.
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
 			a.mu.Lock()
-			//копируем тестовые данные в структуру агента, чтобы при отправке данных были именно эти данные
 			maps.Copy(a.gaugesMetrics, tt.gauges)
 			maps.Copy(a.countersMetrics, tt.counters)
 			a.mu.Unlock()
-			//сам агент не собирал метрики, поэтому при отправке данных будут именно эти данные
+
 			a.MetricsSend()
-			//ну и ссылки должны быть в правильном формате
-			assert.Contains(t, paths, tt.expectedPath)
+
+			assert.Contains(t, received, tt.want)
 		})
 	}
 }

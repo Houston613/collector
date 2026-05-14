@@ -1,15 +1,20 @@
 package agent
 
 import (
-	"maps"
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
-	"log"
+	"maps"
 	"math/rand"
 	"net/http"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
+
+	models "collector/internal/model"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -26,9 +31,10 @@ type Agent struct {
 	pollInterval    time.Duration
 	reportInterval  time.Duration
 	client          *http.Client
+	log             *zap.Logger
 }
 
-func NewAgent(addr string, pollInterval, reportInterval time.Duration) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
@@ -36,6 +42,8 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration) *Agent {
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
 		client:          &http.Client{},
+		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
+		log:             log,
 	}
 }
 
@@ -81,40 +89,57 @@ func (a *Agent) MetricsCollect() {
 
 
 func (a *Agent) MetricsSend() {
-	//сналчала копируем данные в локальные переменные, чтобы не держать блокировку на время отправки данных
+	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
 	maps.Copy(gauges, a.gaugesMetrics)
 	counters := make(map[string]int64, len(a.countersMetrics))
 	maps.Copy(counters, a.countersMetrics)
-	//отпускаем блокировку
 	a.mu.RUnlock()
-	//отправляем данные
+
 	for name, value := range gauges {
-		url := fmt.Sprintf(
-			"%s/update/gauge/%s/%s",
-			a.addr, name,
-			strconv.FormatFloat(value, 'g', -1, 64),
-		)
-		if err := a.sendRequest(url); err != nil {
-			log.Printf("error sending gauge %s: %v", name, err)
+		v := value
+		m := models.Metrics{ID: name, MType: models.Gauge, Value: &v}
+		if err := a.sendJSON(m); err != nil {
+			a.log.Error("error sending gauge", zap.String("name", name), zap.Error(err))
 		}
 	}
 
 	for name, value := range counters {
-		url := fmt.Sprintf("%s/update/counter/%s/%d", a.addr, name, value)
-		if err := a.sendRequest(url); err != nil {
-			log.Printf("error sending counter %s: %v", name, err)
+		v := value
+		m := models.Metrics{ID: name, MType: models.Counter, Delta: &v}
+		if err := a.sendJSON(m); err != nil {
+			a.log.Error("error sending counter", zap.String("name", name), zap.Error(err))
 		}
 	}
 }
 
-func (a *Agent) sendRequest(url string) error {
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+func (a *Agent) sendJSON(m models.Metrics) error {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	// Сжимаем тело запроса в формат gzip
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return fmt.Errorf("gzip writer: %w", err)
+	}
+	if _, err = gz.Write(body); err != nil {
+		return fmt.Errorf("gzip write: %w", err)
+	}
+	if err = gz.Close(); err != nil {
+		return fmt.Errorf("gzip close: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
