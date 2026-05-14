@@ -21,6 +21,7 @@ func main() {
 	storeInterval := flag.Int("i", 300, "интервал сохранения метрик на диск (секунды, 0 — синхронно)")
 	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "путь к файлу хранилища метрик")
 	restore := flag.Bool("r", true, "загружать ранее сохранённые метрики при старте")
+	dbDSN := flag.String("d", "", "строка подключения к базе данных")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -44,6 +45,9 @@ func main() {
 		if b, err := strconv.ParseBool(v); err == nil {
 			*restore = b
 		}
+	}
+	if v := os.Getenv("DATABASE_DSN"); v != "" {
+		*dbDSN = v
 	}
 
 	// Собираем логгер
@@ -102,7 +106,8 @@ func main() {
 	e.Use(middleware.RequestLogger(log))
 	e.Use(middleware.GzipMiddleware(log))
 
-	metricsHandler := handler.NewMetricsHandler(storage)
+	//возможно стоит передавать конфиг вместо строки подключения, но пока так
+	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
 		log.Fatal("сервер завершил работу с ошибкой", zap.Error(err))

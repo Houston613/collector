@@ -48,7 +48,8 @@ func (m *mockRepo) GetAllCounters() map[string]int64 {
 }
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()
-	metricsHandler := NewMetricsHandler(repo)
+	//в тестаз просто пока репозиторий
+	metricsHandler := NewMetricsHandler(repo, "")
 	metricsHandler.RegisterRoutes(e)
 	return e
 }

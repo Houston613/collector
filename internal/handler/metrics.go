@@ -3,21 +3,28 @@ package handler
 import (
 	"collector/internal/repository"
 	models "collector/internal/model"
+	"context"
 	"fmt"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 )
 
 type MetricsHandler struct {
-	repo repository.MemRepository
+	repo  repository.MemRepository
+	dbDSN string
 }
 
-func NewMetricsHandler(repo repository.MemRepository) *MetricsHandler {
-	return &MetricsHandler{repo: repo}
+func NewMetricsHandler(repo repository.MemRepository, dbDSN string) *MetricsHandler {
+	return &MetricsHandler{
+		repo:  repo,
+		dbDSN: dbDSN,
+	}
 }
 
 func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
@@ -96,6 +103,28 @@ func ListMetrics(repo repository.MemRepository) echo.HandlerFunc {
 		return c.HTML(http.StatusOK, sb.String())
 	}
 }
+
+func (h *MetricsHandler) Ping(c echo.Context) error {
+	if h.dbDSN == "" {
+		return c.String(http.StatusInternalServerError, "DATABASE_DSN is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, h.dbDSN)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to connect to db: %v", err))
+	}
+	defer conn.Close(ctx)
+
+	if err := conn.Ping(ctx); err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to ping db: %v", err))
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
 func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 	var m models.Metrics
 	if err := c.Bind(&m); err != nil {
@@ -152,4 +181,6 @@ func (h *MetricsHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/value", h.GetMetricJSON)
 	e.GET("/value/:type/:name", GetMetric(h.repo))
 	e.GET("/", ListMetrics(h.repo))
+	e.GET("/ping", h.Ping)
 }
+
