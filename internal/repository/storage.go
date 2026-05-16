@@ -1,8 +1,8 @@
 package repository
 
 import "maps"
-
 import "sync"
+import "context"
 
 type StructMem struct {
 	mu       sync.RWMutex
@@ -11,12 +11,13 @@ type StructMem struct {
 }
 
 type MemRepository interface {
-	UpdateGauge(name string, value float64)
-	UpdateCounter(name string, value int64)
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
-	GetAllGauges() map[string]float64
-	GetAllCounters() map[string]int64
+	UpdateGauge(name string, value float64) error
+	UpdateCounter(name string, value int64) error
+	GetGauge(name string) (float64, bool, error)
+	GetCounter(name string) (int64, bool, error)
+	GetAllGauges() (map[string]float64, error)
+	GetAllCounters() (map[string]int64, error)
+	Ping(ctx context.Context) error
 }
 
 func NewStructMem() *StructMem {
@@ -26,46 +27,50 @@ func NewStructMem() *StructMem {
 	}
 }
 
-func (m *StructMem) UpdateGauge(name string, value float64) {
+func (m *StructMem) UpdateGauge(name string, value float64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gauges[name] = value
+	return nil
 }
 
-//лок на чтение для консистентности 
-func (m *StructMem) UpdateCounter(name string, value int64) {
+func (m *StructMem) UpdateCounter(name string, value int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counters[name] += value
+	return nil
 }
 
-func (m *StructMem) GetGauge(name string) (float64, bool) {
+func (m *StructMem) GetGauge(name string) (float64, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	v, ok := m.gauges[name]
-	return v, ok
+	return v, ok, nil
 }
 
-func (m *StructMem) GetCounter(name string) (int64, bool) {
+func (m *StructMem) GetCounter(name string) (int64, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	v, ok := m.counters[name]
-	return v, ok
+	return v, ok, nil
 }
-//теперь перед тем как отдать - делаем копию
-func (m *StructMem) GetAllGauges() map[string]float64 {
+
+func (m *StructMem) GetAllGauges() (map[string]float64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	mapCopy := make(map[string]float64, len(m.gauges))
 	maps.Copy(mapCopy, m.gauges)
-	return mapCopy
+	return mapCopy, nil
 }
 
-//теперь перед тем как отдать - делаем копию
-func (m *StructMem) GetAllCounters() map[string]int64 {
+func (m *StructMem) GetAllCounters() (map[string]int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	mapCopy := make(map[string]int64, len(m.counters))
 	maps.Copy(mapCopy, m.counters)
-	return mapCopy
+	return mapCopy, nil
+}
+
+func (m *StructMem) Ping(ctx context.Context) error {
+	return nil // Memory storage is always "up"
 }

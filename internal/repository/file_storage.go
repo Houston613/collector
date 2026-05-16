@@ -27,28 +27,32 @@ func NewFileBackedStorage(filePath string, syncMode bool, log *zap.Logger) *File
 	}
 }
 
-func (f *FileBackedStorage) UpdateGauge(name string, value float64) {
+func (f *FileBackedStorage) UpdateGauge(name string, value float64) error {
 	f.StructMem.UpdateGauge(name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
 			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
-func (f *FileBackedStorage) UpdateCounter(name string, value int64) {
+func (f *FileBackedStorage) UpdateCounter(name string, value int64) error {
 	f.StructMem.UpdateCounter(name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
 			f.log.Error("не удалость синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
 // Save сериализует все текущие метрики в JSON и записывает в файл.
 func (f *FileBackedStorage) Save() error {
-	gauges := f.GetAllGauges()
-	counters := f.GetAllCounters()
+	gauges, _ := f.GetAllGauges()
+	counters, _ := f.GetAllCounters()
 
 	metrics := make([]models.Metrics, 0, len(gauges)+len(counters))
 	for name, v := range gauges {

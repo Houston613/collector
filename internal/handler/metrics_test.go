@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,25 +27,30 @@ func newMockRepo() *mockRepo {
 	}
 }
 
-func (m *mockRepo) UpdateGauge(name string, value float64) {
+func (m *mockRepo) UpdateGauge(name string, value float64) error {
 	m.gauges[name] = value
+	return nil
 }
-func (m *mockRepo) UpdateCounter(name string, value int64) {
+func (m *mockRepo) UpdateCounter(name string, value int64) error {
 	m.counters[name] += value
+	return nil
 }
-func (m *mockRepo) GetGauge(name string) (float64, bool) {
+func (m *mockRepo) GetGauge(name string) (float64, bool, error) {
 	v, ok := m.gauges[name]
-	return v, ok
+	return v, ok, nil
 }
-func (m *mockRepo) GetCounter(name string) (int64, bool) {
+func (m *mockRepo) GetCounter(name string) (int64, bool, error) {
 	v, ok := m.counters[name]
-	return v, ok
+	return v, ok, nil
 }
-func (m *mockRepo) GetAllGauges() map[string]float64 {
-	return m.gauges
+func (m *mockRepo) GetAllGauges() (map[string]float64, error) {
+	return m.gauges, nil
 }
-func (m *mockRepo) GetAllCounters() map[string]int64 {
-	return m.counters
+func (m *mockRepo) GetAllCounters() (map[string]int64, error) {
+	return m.counters, nil
+}
+func (m *mockRepo) Ping(ctx context.Context) error {
+	return nil
 }
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()

@@ -64,10 +64,20 @@ func main() {
 	))
 	defer log.Sync()
 
-	// Хранилище: файловое или только в памяти
+	// Хранилище: БД, файловое или только в памяти
 	var storage repository.MemRepository
 
-	if *fileStoragePath != "" {
+	if *dbDSN != "" {
+		dbStorage, err := repository.NewDBStorage(*dbDSN)
+		if err != nil {
+			log.Fatal("не удалось инициализировать БД", zap.Error(err))
+		}
+		if err := dbStorage.Bootstrap("migrations"); err != nil {
+			log.Fatal("не удалось выполнить миграции", zap.Error(err))
+		}
+		storage = dbStorage
+		log.Info("используется хранилище в БД")
+	} else if *fileStoragePath != "" {
 		fileStorage := repository.NewFileBackedStorage(*fileStoragePath, *storeInterval == 0, log)
 
 		if *restore {
@@ -78,7 +88,7 @@ func main() {
 			}
 		}
 
-		// Периодическое сохранениt
+		// Периодическое сохранение
 		if *storeInterval > 0 {
 			go func() {
 				ticker := time.NewTicker(time.Duration(*storeInterval) * time.Second)
@@ -94,8 +104,10 @@ func main() {
 		}
 
 		storage = fileStorage
+		log.Info("используется файловое хранилище", zap.String("path", *fileStoragePath))
 	} else {
 		storage = repository.NewStructMem()
+		log.Info("используется хранилище в памяти")
 	}
 
 	e := echo.New()
