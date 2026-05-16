@@ -97,30 +97,34 @@ func (a *Agent) MetricsSend() {
 	maps.Copy(counters, a.countersMetrics)
 	a.mu.RUnlock()
 
+	metrics := make([]models.Metrics, 0, len(gauges)+len(counters))
+
 	for name, value := range gauges {
 		v := value
-		m := models.Metrics{ID: name, MType: models.Gauge, Value: &v}
-		if err := a.sendJSON(m); err != nil {
-			a.log.Error("error sending gauge", zap.String("name", name), zap.Error(err))
-		}
+		metrics = append(metrics, models.Metrics{ID: name, MType: models.Gauge, Value: &v})
 	}
 
 	for name, value := range counters {
 		v := value
-		m := models.Metrics{ID: name, MType: models.Counter, Delta: &v}
-		if err := a.sendJSON(m); err != nil {
-			a.log.Error("error sending counter", zap.String("name", name), zap.Error(err))
-		}
+		metrics = append(metrics, models.Metrics{ID: name, MType: models.Counter, Delta: &v})
+	}
+
+	if len(metrics) == 0 {
+		return
+	}
+
+	if err := a.sendBatchJSON(metrics); err != nil {
+		a.log.Error("error sending batch", zap.Error(err))
 	}
 }
 
-func (a *Agent) sendJSON(m models.Metrics) error {
-	body, err := json.Marshal(m)
+func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
+	body, err := json.Marshal(metrics)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return fmt.Errorf("marshal batch: %w", err)
 	}
 
-	// Сжимаем тело запроса в формат gzip
+	// Сжимаем
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -133,7 +137,7 @@ func (a *Agent) sendJSON(m models.Metrics) error {
 		return fmt.Errorf("gzip close: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", &buf)
+	req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", &buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -148,7 +152,6 @@ func (a *Agent) sendJSON(m models.Metrics) error {
 	defer resp.Body.Close()
 	return nil
 }
-
 
 func (a *Agent) Run() {
 	// Сбор метрик в отдельной горутине

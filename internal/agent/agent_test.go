@@ -99,7 +99,7 @@ func TestMetricsCollect_RandomValueInRange(t *testing.T) {
 	assert.Less(t, v, 1.0, "RandomValue should be < 1")
 }
 
-func TestMetricsSend_JSONFormat(t *testing.T) {
+func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 	tests := []struct {
 		name     string
 		gauges   map[string]float64
@@ -133,7 +133,7 @@ func TestMetricsSend_JSONFormat(t *testing.T) {
 			var received []models.Metrics
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, "/update", r.URL.Path)
+				assert.Equal(t, "/updates/", r.URL.Path)
 				assert.Equal(t, http.MethodPost, r.Method)
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
@@ -149,9 +149,9 @@ func TestMetricsSend_JSONFormat(t *testing.T) {
 				body, err := io.ReadAll(reader)
 				require.NoError(t, err)
 
-				var m models.Metrics
+				var m []models.Metrics
 				require.NoError(t, json.Unmarshal(body, &m))
-				received = append(received, m)
+				received = append(received, m...)
 
 				w.WriteHeader(http.StatusOK)
 			}))

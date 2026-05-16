@@ -1,12 +1,16 @@
 package repository
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestUpdateGauge_StoresValue(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	s.UpdateGauge("Alloc", 1024.5)
+	s.UpdateGauge(ctx, "Alloc", 1024.5)
 
-	got, ok, err := s.GetGauge("Alloc")
+	got, ok, err := s.GetGauge(ctx, "Alloc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -19,23 +23,25 @@ func TestUpdateGauge_StoresValue(t *testing.T) {
 }
 
 func TestUpdateGauge_Overwrites(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	s.UpdateGauge("Sys", 100)
-	s.UpdateGauge("Sys", 200)
+	s.UpdateGauge(ctx, "Sys", 100)
+	s.UpdateGauge(ctx, "Sys", 200)
 
-	got, _, _ := s.GetGauge("Sys")
+	got, _, _ := s.GetGauge(ctx, "Sys")
 	if got != 200 {
 		t.Errorf("expected 200, got %v", got)
 	}
 }
 
 func TestUpdateCounter_Accumulates(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	s.UpdateCounter("PollCount", 1)
-	s.UpdateCounter("PollCount", 1)
-	s.UpdateCounter("PollCount", 3)
+	s.UpdateCounter(ctx, "PollCount", 1)
+	s.UpdateCounter(ctx, "PollCount", 1)
+	s.UpdateCounter(ctx, "PollCount", 3)
 
-	got, ok, err := s.GetCounter("PollCount")
+	got, ok, err := s.GetCounter(ctx, "PollCount")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,26 +54,29 @@ func TestUpdateCounter_Accumulates(t *testing.T) {
 }
 
 func TestUpdateCounter_StartsAtZero(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	s.UpdateCounter("hits", 7)
+	s.UpdateCounter(ctx, "hits", 7)
 
-	got, _, _ := s.GetCounter("hits")
+	got, _, _ := s.GetCounter(ctx, "hits")
 	if got != 7 {
 		t.Errorf("expected 7, got %d", got)
 	}
 }
 
 func TestGetGauge_MissingReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	_, ok, _ := s.GetGauge("nonexistent")
+	_, ok, _ := s.GetGauge(ctx, "nonexistent")
 	if ok {
 		t.Error("expected ok=false for missing gauge")
 	}
 }
 
 func TestGetCounter_MissingReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
 	s := NewStructMem()
-	_, ok, _ := s.GetCounter("nonexistent")
+	_, ok, _ := s.GetCounter(ctx, "nonexistent")
 	if ok {
 		t.Error("expected ok=false for missing counter")
 	}

@@ -27,26 +27,41 @@ func newMockRepo() *mockRepo {
 	}
 }
 
-func (m *mockRepo) UpdateGauge(name string, value float64) error {
+func (m *mockRepo) UpdateGauge(ctx context.Context, name string, value float64) error {
 	m.gauges[name] = value
 	return nil
 }
-func (m *mockRepo) UpdateCounter(name string, value int64) error {
+func (m *mockRepo) UpdateCounter(ctx context.Context, name string, value int64) error {
 	m.counters[name] += value
 	return nil
 }
-func (m *mockRepo) GetGauge(name string) (float64, bool, error) {
+func (m *mockRepo) UpdateMetrics(ctx context.Context, metrics []models.Metrics) error {
+	for _, metric := range metrics {
+		switch metric.MType {
+		case models.Gauge:
+			if metric.Value != nil {
+				m.gauges[metric.ID] = *metric.Value
+			}
+		case models.Counter:
+			if metric.Delta != nil {
+				m.counters[metric.ID] += *metric.Delta
+			}
+		}
+	}
+	return nil
+}
+func (m *mockRepo) GetGauge(ctx context.Context, name string) (float64, bool, error) {
 	v, ok := m.gauges[name]
 	return v, ok, nil
 }
-func (m *mockRepo) GetCounter(name string) (int64, bool, error) {
+func (m *mockRepo) GetCounter(ctx context.Context, name string) (int64, bool, error) {
 	v, ok := m.counters[name]
 	return v, ok, nil
 }
-func (m *mockRepo) GetAllGauges() (map[string]float64, error) {
+func (m *mockRepo) GetAllGauges(ctx context.Context) (map[string]float64, error) {
 	return m.gauges, nil
 }
-func (m *mockRepo) GetAllCounters() (map[string]int64, error) {
+func (m *mockRepo) GetAllCounters(ctx context.Context) (map[string]int64, error) {
 	return m.counters, nil
 }
 func (m *mockRepo) Ping(ctx context.Context) error {
@@ -375,4 +390,24 @@ func TestGetMetricJSON_InvalidJSON(t *testing.T) {
 	e.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUpdatesMetricsJSON_OK(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	gaugeVal := 123.45
+	counterDelta := int64(10)
+	metrics := []models.Metrics{
+		{ID: "Gauge1", MType: models.Gauge, Value: &gaugeVal},
+		{ID: "Counter1", MType: models.Counter, Delta: &counterDelta},
+	}
+
+	body := jsonBody(t, metrics)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, jsonRequest(http.MethodPost, "/updates/", body))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 123.45, repo.gauges["Gauge1"])
+	assert.Equal(t, int64(10), repo.counters["Counter1"])
 }

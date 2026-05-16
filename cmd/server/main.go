@@ -4,6 +4,7 @@ import (
 	"collector/internal/handler"
 	"collector/internal/middleware"
 	"collector/internal/repository"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -66,9 +67,10 @@ func main() {
 
 	// Хранилище: БД, файловое или только в памяти
 	var storage repository.MemRepository
+	ctx := context.Background()
 
 	if *dbDSN != "" {
-		dbStorage, err := repository.NewDBStorage(*dbDSN)
+		dbStorage, err := repository.NewDBStorage(ctx, *dbDSN)
 		if err != nil {
 			log.Fatal("не удалось инициализировать БД", zap.Error(err))
 		}
