@@ -207,8 +207,11 @@ func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 func (h *MetricsHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/update/:type/:name/:value", h.UpdateMetrics)
 	e.POST("/update", h.UpdateMetricJSON)
+	e.POST("/update/", h.UpdateMetricJSON)
+	e.POST("/updates", h.UpdatesMetricsJSON)
 	e.POST("/updates/", h.UpdatesMetricsJSON)
 	e.POST("/value", h.GetMetricJSON)
+	e.POST("/value/", h.GetMetricJSON)
 	e.GET("/value/:type/:name", GetMetric(h.repo))
 	e.GET("/", ListMetrics(h.repo))
 	e.GET("/ping", h.Ping)

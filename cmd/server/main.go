@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -113,9 +112,6 @@ func main() {
 	}
 
 	e := echo.New()
-	// Pre-middleware: убираем trailing slash до роутинга,
-	// чтобы /update/ и /update обрабатывались одинаково
-	e.Pre(echomiddleware.RemoveTrailingSlash())
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
 	e.Use(middleware.GzipMiddleware(log))
