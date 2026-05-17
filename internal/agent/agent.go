@@ -2,11 +2,15 @@ package agent
 
 import (
 	"bytes"
+	"collector/pkg/retry"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
@@ -47,7 +51,6 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.
 	}
 }
 
-
 func (a *Agent) MetricsCollect() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -86,7 +89,6 @@ func (a *Agent) MetricsCollect() {
 	a.gaugesMetrics["RandomValue"] = rand.Float64()
 	a.countersMetrics["PollCount"]++
 }
-
 
 func (a *Agent) MetricsSend() {
 	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
@@ -137,20 +139,30 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		return fmt.Errorf("gzip close: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", &buf)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Accept-Encoding", "gzip")
+	compressedData := buf.Bytes()
 
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
+	return retry.Do(context.Background(), func() error {
+		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(compressedData))
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		resp, err := a.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		return nil
+	}, func(err error) bool {
+		var netErr net.Error
+		if errors.As(err, &netErr) {
+			return true
+		}
+		return false
+	})
 }
 
 func (a *Agent) Run() {
