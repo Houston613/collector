@@ -64,9 +64,6 @@ func (m *mockRepo) GetAllGauges(ctx context.Context) (map[string]float64, error)
 func (m *mockRepo) GetAllCounters(ctx context.Context) (map[string]int64, error) {
 	return m.counters, nil
 }
-func (m *mockRepo) Ping(ctx context.Context) error {
-	return nil
-}
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()
 	//в тестаз просто пока репозиторий

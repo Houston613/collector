@@ -124,8 +124,11 @@ func (h *MetricsHandler) Ping(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 1*time.Second)
 	defer cancel()
 
-	if err := h.repo.Ping(ctx); err != nil {
-		return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to ping storage: %v", err))
+	// Проверяем, реализует ли репозиторий интерфейс Pinger, и если да, то вызываем метод Ping для проверки доступности хранилища.
+	if pinger, ok := h.repo.(repository.Pinger); ok {
+		if err := pinger.Ping(ctx); err != nil {
+			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to ping storage: %v", err))
+		}
 	}
 
 	return c.NoContent(http.StatusOK)

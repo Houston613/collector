@@ -21,13 +21,10 @@ func TestDo(t *testing.T) {
 	})
 
 	t.Run("success after retries", func(t *testing.T) {
-		// Mock intervals to be fast for testing
-		oldIntervals := Intervals
-		Intervals = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
-		defer func() { Intervals = oldIntervals }()
+		intervals := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
 
 		count := 0
-		err := Do(context.Background(), func() error {
+		err := DoWithIntervals(context.Background(), intervals, func() error {
 			count++
 			if count < 3 {
 				return errors.New("retriable")
@@ -40,13 +37,11 @@ func TestDo(t *testing.T) {
 	})
 
 	t.Run("fail after all retries", func(t *testing.T) {
-		oldIntervals := Intervals
-		Intervals = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
-		defer func() { Intervals = oldIntervals }()
+		intervals := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
 
 		count := 0
 		expectedErr := errors.New("final error")
-		err := Do(context.Background(), func() error {
+		err := DoWithIntervals(context.Background(), intervals, func() error {
 			count++
 			return expectedErr
 		}, func(err error) bool { return true })
@@ -60,16 +55,16 @@ func TestDo(t *testing.T) {
 		err := Do(context.Background(), func() error {
 			count++
 			return errors.New("not retriable")
-		}, func(err error) bool { return false })
+		}, func(err error) bool {
+			return false
+		})
 
 		assert.Error(t, err)
 		assert.Equal(t, 1, count)
 	})
 
 	t.Run("context cancelled", func(t *testing.T) {
-		oldIntervals := Intervals
-		Intervals = []time.Duration{1 * time.Second}
-		defer func() { Intervals = oldIntervals }()
+		intervals := []time.Duration{1 * time.Second}
 
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
@@ -78,7 +73,7 @@ func TestDo(t *testing.T) {
 		}()
 
 		count := 0
-		err := Do(ctx, func() error {
+		err := DoWithIntervals(ctx, intervals, func() error {
 			count++
 			return errors.New("retriable")
 		}, func(err error) bool { return true })

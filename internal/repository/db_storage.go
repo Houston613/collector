@@ -13,7 +13,6 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,7 +67,7 @@ func (d *DBStorage) Bootstrap(migrationsPath string) error {
 func isRetriableDB(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		return strings.HasPrefix(pgErr.Code, "08") || pgErr.Code == pgerrcode.UniqueViolation
+		return strings.HasPrefix(pgErr.Code, "08")
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {

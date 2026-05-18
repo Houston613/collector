@@ -13,6 +13,11 @@ type StructMem struct {
 	counters map[string]int64
 }
 
+//интерфейс для проверки доступности хранилища
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 type MemRepository interface {
 	UpdateGauge(ctx context.Context, name string, value float64) error
 	UpdateCounter(ctx context.Context, name string, value int64) error
@@ -21,7 +26,6 @@ type MemRepository interface {
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
 	GetAllGauges(ctx context.Context) (map[string]float64, error)
 	GetAllCounters(ctx context.Context) (map[string]int64, error)
-	Ping(ctx context.Context) error
 }
 
 func NewStructMem() *StructMem {
@@ -92,8 +96,4 @@ func (m *StructMem) GetAllCounters(ctx context.Context) (map[string]int64, error
 	mapCopy := make(map[string]int64, len(m.counters))
 	maps.Copy(mapCopy, m.counters)
 	return mapCopy, nil
-}
-
-func (m *StructMem) Ping(ctx context.Context) error {
-	return nil // Всегда возвращаем nil, так как это in-memory хранилище. всегда работает
 }

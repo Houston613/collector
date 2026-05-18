@@ -155,13 +155,15 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 			return err
 		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("server error: %d", resp.StatusCode)
+		}
+
 		return nil
 	}, func(err error) bool {
 		var netErr net.Error
-		if errors.As(err, &netErr) {
-			return true
-		}
-		return false
+		return errors.As(err, &netErr)
 	})
 }
 
