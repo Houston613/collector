@@ -2,6 +2,7 @@ package repository
 
 import (
 	models "collector/internal/model"
+	"context"
 	"encoding/json"
 	"os"
 	"sync"
@@ -27,28 +28,44 @@ func NewFileBackedStorage(filePath string, syncMode bool, log *zap.Logger) *File
 	}
 }
 
-func (f *FileBackedStorage) UpdateGauge(name string, value float64) {
-	f.StructMem.UpdateGauge(name, value)
+func (f *FileBackedStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
+	f.StructMem.UpdateGauge(ctx, name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
 			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
-func (f *FileBackedStorage) UpdateCounter(name string, value int64) {
-	f.StructMem.UpdateCounter(name, value)
+func (f *FileBackedStorage) UpdateCounter(ctx context.Context, name string, value int64) error {
+	f.StructMem.UpdateCounter(ctx, name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
 			f.log.Error("не удалость синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			return err
 		}
 	}
+	return nil
+}
+
+func (f *FileBackedStorage) UpdateMetrics(ctx context.Context, metrics []models.Metrics) error {
+	f.StructMem.UpdateMetrics(ctx, metrics)
+	if f.syncMode {
+		if err := f.Save(); err != nil {
+			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			return err
+		}
+	}
+	return nil
 }
 
 // Save сериализует все текущие метрики в JSON и записывает в файл.
 func (f *FileBackedStorage) Save() error {
-	gauges := f.GetAllGauges()
-	counters := f.GetAllCounters()
+	ctx := context.Background()
+	gauges, _ := f.GetAllGauges(ctx)
+	counters, _ := f.GetAllCounters(ctx)
 
 	metrics := make([]models.Metrics, 0, len(gauges)+len(counters))
 	for name, v := range gauges {
@@ -89,15 +106,16 @@ func (f *FileBackedStorage) Load() error {
 		return err
 	}
 
+	ctx := context.Background()
 	for _, m := range metrics {
 		switch m.MType {
 		case models.Gauge:
 			if m.Value != nil {
-				f.StructMem.UpdateGauge(m.ID, *m.Value)
+				f.StructMem.UpdateGauge(ctx, m.ID, *m.Value)
 			}
 		case models.Counter:
 			if m.Delta != nil {
-				f.StructMem.UpdateCounter(m.ID, *m.Delta)
+				f.StructMem.UpdateCounter(ctx, m.ID, *m.Delta)
 			}
 		}
 	}

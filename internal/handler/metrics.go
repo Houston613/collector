@@ -1,13 +1,15 @@
 package handler
 
 import (
-	"collector/internal/repository"
 	models "collector/internal/model"
+	"collector/internal/repository"
+	"context"
 	"fmt"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 )
@@ -16,8 +18,10 @@ type MetricsHandler struct {
 	repo repository.MemRepository
 }
 
-func NewMetricsHandler(repo repository.MemRepository) *MetricsHandler {
-	return &MetricsHandler{repo: repo}
+func NewMetricsHandler(repo repository.MemRepository, dbDSN string) *MetricsHandler {
+	return &MetricsHandler{
+		repo: repo,
+	}
 }
 
 func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
@@ -39,14 +43,18 @@ func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
 		if err != nil {
 			return c.String(http.StatusBadRequest, "Невереное значение для метрики Gauge")
 		}
-		h.repo.UpdateGauge(metricName, val)
+		if err := h.repo.UpdateGauge(c.Request().Context(), metricName, val); err != nil {
+			return c.String(http.StatusInternalServerError, "Ошибка обновления метрики")
+		}
 
 	case "counter":
 		val, err := strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
 			return c.String(http.StatusBadRequest, "Невереное значение для метрики Counter")
 		}
-		h.repo.UpdateCounter(metricName, val)
+		if err := h.repo.UpdateCounter(c.Request().Context(), metricName, val); err != nil {
+			return c.String(http.StatusInternalServerError, "Ошибка обновления метрики")
+		}
 
 	default:
 		return c.String(http.StatusBadRequest, "Неверный тип метрики")
@@ -62,14 +70,20 @@ func GetMetric(repo repository.MemRepository) echo.HandlerFunc {
 
 		switch metricType {
 		case "gauge":
-			val, ok := repo.GetGauge(metricName)
+			val, ok, err := repo.GetGauge(c.Request().Context(), metricName)
+			if err != nil {
+				return c.String(http.StatusInternalServerError, "Ошибка получения метрики")
+			}
 			if !ok {
 				return c.String(http.StatusNotFound, "Метрика не найдена")
 			}
 			return c.String(http.StatusOK, strconv.FormatFloat(val, 'f', -1, 64))
 
 		case "counter":
-			val, ok := repo.GetCounter(metricName)
+			val, ok, err := repo.GetCounter(c.Request().Context(), metricName)
+			if err != nil {
+				return c.String(http.StatusInternalServerError, "Ошибка получения метрики")
+			}
 			if !ok {
 				return c.String(http.StatusNotFound, "Метрика не найдена")
 			}
@@ -86,16 +100,40 @@ func ListMetrics(repo repository.MemRepository) echo.HandlerFunc {
 		var sb strings.Builder
 		sb.WriteString("<html><body><h1>Метрики</h1><ul>")
 
-		for name, val := range repo.GetAllGauges() {
+		gauges, err := repo.GetAllGauges(c.Request().Context())
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "Ошибка получения списка метрик")
+		}
+		for name, val := range gauges {
 			fmt.Fprintf(&sb, "<li>gauge/%s = %s</li>", name, strconv.FormatFloat(val, 'f', -1, 64))
 		}
-		for name, val := range repo.GetAllCounters() {
+
+		counters, err := repo.GetAllCounters(c.Request().Context())
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "Ошибка получения списка метрик")
+		}
+		for name, val := range counters {
 			fmt.Fprintf(&sb, "<li>counter/%s = %d</li>", name, val)
 		}
 		sb.WriteString("</ul></body></html>")
 		return c.HTML(http.StatusOK, sb.String())
 	}
 }
+
+func (h *MetricsHandler) Ping(c echo.Context) error {
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 1*time.Second)
+	defer cancel()
+
+	// Проверяем, реализует ли репозиторий интерфейс Pinger, и если да, то вызываем метод Ping для проверки доступности хранилища.
+	if pinger, ok := h.repo.(repository.Pinger); ok {
+		if err := pinger.Ping(ctx); err != nil {
+			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to ping storage: %v", err))
+		}
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
 func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 	var m models.Metrics
 	if err := c.Bind(&m); err != nil {
@@ -107,12 +145,16 @@ func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 		if m.Value == nil {
 			return c.JSON(http.StatusBadRequest, "value обязательно для gauge")
 		}
-		h.repo.UpdateGauge(m.ID, *m.Value)
+		if err := h.repo.UpdateGauge(c.Request().Context(), m.ID, *m.Value); err != nil {
+			return c.JSON(http.StatusInternalServerError, "ошибка обновления метрики")
+		}
 	case models.Counter:
 		if m.Delta == nil {
 			return c.JSON(http.StatusBadRequest, "delta обязательно для counter")
 		}
-		h.repo.UpdateCounter(m.ID, *m.Delta)
+		if err := h.repo.UpdateCounter(c.Request().Context(), m.ID, *m.Delta); err != nil {
+			return c.JSON(http.StatusInternalServerError, "ошибка обновления метрики")
+		}
 	default:
 		return c.JSON(http.StatusBadRequest, "неверный тип метрики")
 	}
@@ -120,7 +162,20 @@ func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 	return c.JSON(http.StatusOK, m)
 }
 
-// GetMetricJSON принимает JSON с ID и MType, возвращает JSON с заполненным значением.
+func (h *MetricsHandler) UpdatesMetricsJSON(c echo.Context) error {
+	var metrics []models.Metrics
+	if err := c.Bind(&metrics); err != nil {
+		return c.JSON(http.StatusBadRequest, "не удалось распарсить JSON")
+	}
+
+	if err := h.repo.UpdateMetrics(c.Request().Context(), metrics); err != nil {
+		return c.JSON(http.StatusInternalServerError, "ошибка обновления метрик")
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
+// GetMetricJSON принимает JSON с ID и MType, возвращает JSON с заполнением значением.
 func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 	var m models.Metrics
 	if err := c.Bind(&m); err != nil {
@@ -128,13 +183,19 @@ func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 	}
 	switch m.MType {
 	case models.Gauge:
-		val, ok := h.repo.GetGauge(m.ID)
+		val, ok, err := h.repo.GetGauge(c.Request().Context(), m.ID)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, "ошибка получения метрики")
+		}
 		if !ok {
 			return c.JSON(http.StatusNotFound, "метрика не найдена")
 		}
 		m.Value = &val
 	case models.Counter:
-		val, ok := h.repo.GetCounter(m.ID)
+		val, ok, err := h.repo.GetCounter(c.Request().Context(), m.ID)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, "ошибка получения метрики")
+		}
 		if !ok {
 			return c.JSON(http.StatusNotFound, "метрика не найдена")
 		}
@@ -149,7 +210,12 @@ func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 func (h *MetricsHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/update/:type/:name/:value", h.UpdateMetrics)
 	e.POST("/update", h.UpdateMetricJSON)
+	e.POST("/update/", h.UpdateMetricJSON)
+	e.POST("/updates", h.UpdatesMetricsJSON)
+	e.POST("/updates/", h.UpdatesMetricsJSON)
 	e.POST("/value", h.GetMetricJSON)
+	e.POST("/value/", h.GetMetricJSON)
 	e.GET("/value/:type/:name", GetMetric(h.repo))
 	e.GET("/", ListMetrics(h.repo))
+	e.GET("/ping", h.Ping)
 }

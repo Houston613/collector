@@ -4,6 +4,7 @@ import (
 	"collector/internal/handler"
 	"collector/internal/middleware"
 	"collector/internal/repository"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	echomiddleware "github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -21,6 +21,7 @@ func main() {
 	storeInterval := flag.Int("i", 300, "интервал сохранения метрик на диск (секунды, 0 — синхронно)")
 	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "путь к файлу хранилища метрик")
 	restore := flag.Bool("r", true, "загружать ранее сохранённые метрики при старте")
+	dbDSN := flag.String("d", "", "строка подключения к базе данных")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -45,6 +46,9 @@ func main() {
 			*restore = b
 		}
 	}
+	if v := os.Getenv("DATABASE_DSN"); v != "" {
+		*dbDSN = v
+	}
 
 	// Собираем логгер
 	cfg := zap.NewProductionEncoderConfig()
@@ -60,10 +64,21 @@ func main() {
 	))
 	defer log.Sync()
 
-	// Хранилище: файловое или только в памяти
+	// Хранилище: БД, файловое или только в памяти
 	var storage repository.MemRepository
+	ctx := context.Background()
 
-	if *fileStoragePath != "" {
+	if *dbDSN != "" {
+		dbStorage, err := repository.NewDBStorage(ctx, *dbDSN)
+		if err != nil {
+			log.Fatal("не удалось инициализировать БД", zap.Error(err))
+		}
+		if err := dbStorage.Bootstrap("migrations"); err != nil {
+			log.Fatal("не удалось выполнить миграции", zap.Error(err))
+		}
+		storage = dbStorage
+		log.Info("используется хранилище в БД")
+	} else if *fileStoragePath != "" {
 		fileStorage := repository.NewFileBackedStorage(*fileStoragePath, *storeInterval == 0, log)
 
 		if *restore {
@@ -74,7 +89,7 @@ func main() {
 			}
 		}
 
-		// Периодическое сохранениt
+		// Периодическое сохранение
 		if *storeInterval > 0 {
 			go func() {
 				ticker := time.NewTicker(time.Duration(*storeInterval) * time.Second)
@@ -90,19 +105,19 @@ func main() {
 		}
 
 		storage = fileStorage
+		log.Info("используется файловое хранилище", zap.String("path", *fileStoragePath))
 	} else {
 		storage = repository.NewStructMem()
+		log.Info("используется хранилище в памяти")
 	}
 
 	e := echo.New()
-	// Pre-middleware: убираем trailing slash до роутинга,
-	// чтобы /update/ и /update обрабатывались одинаково
-	e.Pre(echomiddleware.RemoveTrailingSlash())
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
 	e.Use(middleware.GzipMiddleware(log))
 
-	metricsHandler := handler.NewMetricsHandler(storage)
+	//возможно стоит передавать конфиг вместо строки подключения, но пока так
+	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
 		log.Fatal("сервер завершил работу с ошибкой", zap.Error(err))

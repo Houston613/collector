@@ -2,11 +2,15 @@ package agent
 
 import (
 	"bytes"
+	"collector/pkg/retry"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"sync"
@@ -47,7 +51,6 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.
 	}
 }
 
-
 func (a *Agent) MetricsCollect() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -87,7 +90,6 @@ func (a *Agent) MetricsCollect() {
 	a.countersMetrics["PollCount"]++
 }
 
-
 func (a *Agent) MetricsSend() {
 	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
 	a.mu.RLock()
@@ -97,30 +99,34 @@ func (a *Agent) MetricsSend() {
 	maps.Copy(counters, a.countersMetrics)
 	a.mu.RUnlock()
 
+	metrics := make([]models.Metrics, 0, len(gauges)+len(counters))
+
 	for name, value := range gauges {
 		v := value
-		m := models.Metrics{ID: name, MType: models.Gauge, Value: &v}
-		if err := a.sendJSON(m); err != nil {
-			a.log.Error("error sending gauge", zap.String("name", name), zap.Error(err))
-		}
+		metrics = append(metrics, models.Metrics{ID: name, MType: models.Gauge, Value: &v})
 	}
 
 	for name, value := range counters {
 		v := value
-		m := models.Metrics{ID: name, MType: models.Counter, Delta: &v}
-		if err := a.sendJSON(m); err != nil {
-			a.log.Error("error sending counter", zap.String("name", name), zap.Error(err))
-		}
+		metrics = append(metrics, models.Metrics{ID: name, MType: models.Counter, Delta: &v})
+	}
+
+	if len(metrics) == 0 {
+		return
+	}
+
+	if err := a.sendBatchJSON(metrics); err != nil {
+		a.log.Error("error sending batch", zap.Error(err))
 	}
 }
 
-func (a *Agent) sendJSON(m models.Metrics) error {
-	body, err := json.Marshal(m)
+func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
+	body, err := json.Marshal(metrics)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return fmt.Errorf("marshal batch: %w", err)
 	}
 
-	// Сжимаем тело запроса в формат gzip
+	// Сжимаем
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -133,22 +139,33 @@ func (a *Agent) sendJSON(m models.Metrics) error {
 		return fmt.Errorf("gzip close: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.addr+"/update", &buf)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Accept-Encoding", "gzip")
+	compressedData := buf.Bytes()
 
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-	return nil
+	return retry.Do(context.Background(), func() error {
+		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(compressedData))
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		resp, err := a.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("server error: %d", resp.StatusCode)
+		}
+
+		return nil
+	}, func(err error) bool {
+		var netErr net.Error
+		return errors.As(err, &netErr)
+	})
 }
-
 
 func (a *Agent) Run() {
 	// Сбор метрик в отдельной горутине
