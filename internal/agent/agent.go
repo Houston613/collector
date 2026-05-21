@@ -17,6 +17,7 @@ import (
 	"time"
 
 	models "collector/internal/model"
+	"collector/pkg/signature"
 
 	"go.uber.org/zap"
 )
@@ -34,17 +35,19 @@ type Agent struct {
 	addr            string
 	pollInterval    time.Duration
 	reportInterval  time.Duration
+	key             string
 	client          *http.Client
 	log             *zap.Logger
 }
 
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.Logger) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
 		addr:            addr,
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
+		key:             key,
 		client:          &http.Client{},
 		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
 		log:             log,
@@ -149,6 +152,11 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
 		req.Header.Set("Accept-Encoding", "gzip")
+
+		if a.key != "" {
+			hash := signature.Sign(compressedData, a.key)
+			req.Header.Set("HashSHA256", hash)
+		}
 
 		resp, err := a.client.Do(req)
 		if err != nil {

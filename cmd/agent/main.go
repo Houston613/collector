@@ -18,6 +18,7 @@ func main() {
 	addr := flag.String("a", "localhost:8080", "адрес HTTP-сервера")
 	reportInterval := flag.Int("r", 10, "частота отправки метрик")
 	pollInterval := flag.Int("p", 2, "частота опроса метрик")
+	key := flag.String("k", "", "ключ для подписи данных")
 	flag.Parse()
 
 	//если подали "непонятные" аргументы, то сообщаем об этом и завершаем программу
@@ -42,6 +43,9 @@ func main() {
 			*pollInterval = v
 		}
 	}
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*key = envKey
+	}
 
 	// Собираем логгер
 	cfg := zap.NewProductionEncoderConfig()
@@ -62,6 +66,7 @@ func main() {
 		"http://"+*addr,
 		time.Duration(*pollInterval)*time.Second,
 		time.Duration(*reportInterval)*time.Second,
+		*key,
 		log,
 	)
 	a.Run()

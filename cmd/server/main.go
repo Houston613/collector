@@ -22,6 +22,7 @@ func main() {
 	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "путь к файлу хранилища метрик")
 	restore := flag.Bool("r", true, "загружать ранее сохранённые метрики при старте")
 	dbDSN := flag.String("d", "", "строка подключения к базе данных")
+	key := flag.String("k", "", "ключ для подписи данных")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -48,6 +49,9 @@ func main() {
 	}
 	if v := os.Getenv("DATABASE_DSN"); v != "" {
 		*dbDSN = v
+	}
+	if v := os.Getenv("KEY"); v != "" {
+		*key = v
 	}
 
 	// Собираем логгер
@@ -114,6 +118,7 @@ func main() {
 	e := echo.New()
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
+	e.Use(middleware.SignatureMiddleware(*key, log))
 	e.Use(middleware.GzipMiddleware(log))
 
 	//возможно стоит передавать конфиг вместо строки подключения, но пока так
