@@ -26,7 +26,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", zap.NewNop())
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 	a.MetricsCollect()
 
 	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
@@ -54,7 +54,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -77,7 +77,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -90,14 +90,21 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 	}
 }
 
-func TestMetricsCollect_RandomValueInRange(t *testing.T) {
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", zap.NewNop())
-	a.MetricsCollect()
+func TestMetricsCollectGopsutil(t *testing.T) {
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+	a.MetricsCollectGopsutil()
 
-	v := a.gaugesMetrics["RandomValue"]
-	assert.GreaterOrEqual(t, v, 0.0, "RandomValue should be >= 0")
-	assert.Less(t, v, 1.0, "RandomValue should be < 1")
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	assert.Contains(t, a.gaugesMetrics, "TotalMemory")
+	assert.Contains(t, a.gaugesMetrics, "FreeMemory")
+	assert.Contains(t, a.gaugesMetrics, "CPUutilization1")
+
+	assert.Greater(t, a.gaugesMetrics["TotalMemory"], 0.0)
+	assert.GreaterOrEqual(t, a.gaugesMetrics["FreeMemory"], 0.0)
 }
+
 
 func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 	tests := []struct {
@@ -158,13 +165,16 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			defer srv.Close()
 
 			//NewNop - это заглушка для логгера, которая не будет ничего выводить. Это полезно в тестах, чтобы не засорять вывод.
-			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", zap.NewNop())
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			a.mu.Lock()
 			maps.Copy(a.gaugesMetrics, tt.gauges)
 			maps.Copy(a.countersMetrics, tt.counters)
 			a.mu.Unlock()
 
-			a.MetricsSend()
+			jobs := make(chan []models.Metrics, 1)
+			a.MetricsSend(jobs)
+			m := <-jobs
+			require.NoError(t, a.sendBatchJSON(m))
 
 			assert.Contains(t, received, tt.want)
 		})

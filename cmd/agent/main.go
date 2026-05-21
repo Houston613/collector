@@ -19,6 +19,7 @@ func main() {
 	reportInterval := flag.Int("r", 10, "частота отправки метрик")
 	pollInterval := flag.Int("p", 2, "частота опроса метрик")
 	key := flag.String("k", "", "ключ для подписи данных")
+	rateLimit := flag.Int("l", 3, "ограничение количества одновременно исходящих запросов на сервер")
 	flag.Parse()
 
 	//если подали "непонятные" аргументы, то сообщаем об этом и завершаем программу
@@ -46,6 +47,11 @@ func main() {
 	if envKey := os.Getenv("KEY"); envKey != "" {
 		*key = envKey
 	}
+	if envRateLimit := os.Getenv("RATE_LIMIT"); envRateLimit != "" {
+		if v, err := strconv.Atoi(envRateLimit); err == nil {
+			*rateLimit = v
+		}
+	}
 
 	// Собираем логгер
 	cfg := zap.NewProductionEncoderConfig()
@@ -67,6 +73,7 @@ func main() {
 		time.Duration(*pollInterval)*time.Second,
 		time.Duration(*reportInterval)*time.Second,
 		*key,
+		*rateLimit,
 		log,
 	)
 	a.Run()

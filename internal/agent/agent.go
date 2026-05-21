@@ -19,6 +19,8 @@ import (
 	models "collector/internal/model"
 	"collector/pkg/signature"
 
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 )
 
@@ -36,11 +38,12 @@ type Agent struct {
 	pollInterval    time.Duration
 	reportInterval  time.Duration
 	key             string
+	rateLimit       int
 	client          *http.Client
 	log             *zap.Logger
 }
 
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, log *zap.Logger) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
@@ -48,6 +51,7 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
 		key:             key,
+		rateLimit:       rateLimit,
 		client:          &http.Client{},
 		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
 		log:             log,
@@ -93,7 +97,31 @@ func (a *Agent) MetricsCollect() {
 	a.countersMetrics["PollCount"]++
 }
 
-func (a *Agent) MetricsSend() {
+func (a *Agent) MetricsCollectGopsutil() {
+	v, err := mem.VirtualMemory()
+	if err != nil {
+		a.log.Error("error getting virtual memory stats", zap.Error(err))
+		return
+	}
+
+	c, err := cpu.Percent(0, true)
+	if err != nil {
+		a.log.Error("error getting cpu stats", zap.Error(err))
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.gaugesMetrics["TotalMemory"] = float64(v.Total)
+	a.gaugesMetrics["FreeMemory"] = float64(v.Free)
+
+	for i, p := range c {
+		a.gaugesMetrics[fmt.Sprintf("CPUutilization%d", i+1)] = p
+	}
+}
+
+func (a *Agent) MetricsSend(jobs chan<- []models.Metrics) {
 	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
@@ -118,8 +146,14 @@ func (a *Agent) MetricsSend() {
 		return
 	}
 
-	if err := a.sendBatchJSON(metrics); err != nil {
-		a.log.Error("error sending batch", zap.Error(err))
+	jobs <- metrics
+}
+
+func (a *Agent) worker(jobs <-chan []models.Metrics) {
+	for metrics := range jobs {
+		if err := a.sendBatchJSON(metrics); err != nil {
+			a.log.Error("error sending batch", zap.Error(err))
+		}
 	}
 }
 
@@ -154,7 +188,6 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		req.Header.Set("Accept-Encoding", "gzip")
 
 		if a.key != "" {
-			
 			hash := signature.Sign(body, a.key)
 			req.Header.Set("HashSHA256", hash)
 		}
@@ -177,17 +210,35 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 }
 
 func (a *Agent) Run() {
-	// Сбор метрик в отдельной горутине
-	//значит будет конкурентный доступ к данным, поэтому используем мьютекс для защиты данных
+	jobs := make(chan []models.Metrics, a.rateLimit)
+
+	// Воркеры для отправки метрик
+	for i := 0; i < a.rateLimit; i++ {
+		go a.worker(jobs)
+	}
+
+	// Сбор метрик
 	go func() {
-		for {
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
 			a.MetricsCollect()
-			time.Sleep(a.pollInterval)
 		}
 	}()
 
-	for {
-		time.Sleep(a.reportInterval)
-		a.MetricsSend()
+	// Сбор gopsutil метрик
+	go func() {
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			a.MetricsCollectGopsutil()
+		}
+	}()
+
+	// Отправка метрик по тикеру
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.MetricsSend(jobs)
 	}
 }
