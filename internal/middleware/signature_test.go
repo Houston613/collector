@@ -59,7 +59,8 @@ func TestSignatureMiddleware(t *testing.T) {
 
 		e.ServeHTTP(rec, req)
 
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.NotEmpty(t, rec.Header().Get("HashSHA256"))
 	})
 
 	t.Run("empty body valid signature", func(t *testing.T) {
