@@ -105,7 +105,6 @@ func TestMetricsCollectGopsutil(t *testing.T) {
 	assert.GreaterOrEqual(t, a.gaugesMetrics["FreeMemory"], 0.0)
 }
 
-
 func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 	tests := []struct {
 		name     string

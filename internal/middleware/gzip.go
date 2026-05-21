@@ -46,7 +46,6 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 	return w.gzWriter.Write(b)
 }
 
-
 // Close завершает gzip-поток только если через него что-то записывалось.
 func (w *compressWriter) Close() {
 	if w.written {

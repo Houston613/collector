@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	DefaultServerAddress    = "localhost:8080"
+	DefaultServerAddress  = "localhost:8080"
 	DefaultPollInterval   = 2 * time.Second
 	DefaultReportInterval = 10 * time.Second
 )
@@ -54,7 +54,7 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		rateLimit:       rateLimit,
 		client:          &http.Client{},
 		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
-		log:             log,
+		log: log,
 	}
 }
 
@@ -162,7 +162,6 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal batch: %w", err)
 	}
-
 	// Сжимаем
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)

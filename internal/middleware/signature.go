@@ -64,9 +64,8 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 				reqHash = c.Request().Header.Get("Hash")
 			}
 
-			// Если ключ не пустой, но заголовок пустой или "none",
-			// некоторые тесты ожидают, что мы пропустим проверку.
-			if reqHash == "" || reqHash == "none" {
+			// Если заголовок отсутствует, пропускаем проверку
+			if reqHash == "" {
 				return handleWithSignature(c, next, key, log)
 			}
 

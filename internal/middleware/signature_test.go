@@ -36,7 +36,7 @@ func TestSignatureMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "OK", rec.Body.String())
 		assert.NotEmpty(t, rec.Header().Get("HashSHA256"))
-		
+
 		expectedRespHash := signature.Sign([]byte("OK"), key)
 		assert.Equal(t, expectedRespHash, rec.Header().Get("HashSHA256"))
 	})

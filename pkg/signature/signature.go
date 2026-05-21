@@ -15,5 +15,14 @@ func Sign(data []byte, key string) string {
 
 // Verify проверяет соответствие HMAC-SHA256 хеша данным и ключу.
 func Verify(data []byte, key string, signature string) bool {
-	return Sign(data, key) == signature
+	sigBytes, err := hex.DecodeString(signature)
+	if err != nil {
+		return false
+	}
+
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	expected := h.Sum(nil)
+
+	return hmac.Equal(sigBytes, expected)
 }
