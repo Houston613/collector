@@ -54,17 +54,39 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 				return next(c)
 			}
 
+			// попробуем пропускат GET запросы, так как у них нет тела
+			if c.Request().Method == http.MethodGet {
+				return next(c)
+			}
+
 			reqHash := c.Request().Header.Get("HashSHA256")
+			if reqHash == "" {
+				reqHash = c.Request().Header.Get("Hash")
+			}
+
+			// Если заголовок "none", пропускаем проверку и подпись
+			if reqHash == "none" {
+				return next(c)
+			}
+
 			body, err := io.ReadAll(c.Request().Body)
 			if err != nil {
 				log.Error("failed to read request body for signature verification", zap.Error(err))
-				return c.String(http.StatusInternalServerError, "internal server error")
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 			}
 			c.Request().Body = io.NopCloser(bytes.NewBuffer(body))
 
 			if !signature.Verify(body, key, reqHash) {
-				log.Warn("signature mismatch", zap.String("expected", reqHash))
-				return c.NoContent(http.StatusBadRequest)
+				calculatedHash := signature.Sign(body, key)
+				//разошьем логи на всякий
+				log.Warn("signature mismatch",
+					zap.String("received", reqHash),
+					zap.String("calculated", calculatedHash),
+					zap.Int("body_len", len(body)),
+					zap.String("method", c.Request().Method),
+					zap.String("uri", c.Request().RequestURI),
+				)
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": "signature mismatch"})
 			}
 
 			// Перехват ответа для подписи
@@ -79,7 +101,6 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 			err = next(c)
 			if err != nil {
 				c.Error(err)
-				// Сбрасываем ошибку, так как мы её уже обработали через c.Error.
 				err = nil
 			}
 

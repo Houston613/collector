@@ -118,8 +118,9 @@ func main() {
 	e := echo.New()
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
-	e.Use(middleware.SignatureMiddleware(*key, log))
+	// сначала сжимать, а потом подписывать
 	e.Use(middleware.GzipMiddleware(log))
+	e.Use(middleware.SignatureMiddleware(*key, log))
 
 	//возможно стоит передавать конфиг вместо строки подключения, но пока так
 	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN)

@@ -154,7 +154,8 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		req.Header.Set("Accept-Encoding", "gzip")
 
 		if a.key != "" {
-			hash := signature.Sign(compressedData, a.key)
+			
+			hash := signature.Sign(body, a.key)
 			req.Header.Set("HashSHA256", hash)
 		}
 
