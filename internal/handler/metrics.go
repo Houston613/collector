@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"collector/internal/audit"
 	models "collector/internal/model"
 	"collector/internal/repository"
 	"context"
@@ -15,13 +16,25 @@ import (
 )
 
 type MetricsHandler struct {
-	repo repository.MemRepository
+	repo    repository.MemRepository
+	auditor *audit.Notifier
 }
 
-func NewMetricsHandler(repo repository.MemRepository, dbDSN string) *MetricsHandler {
+func NewMetricsHandler(repo repository.MemRepository, dbDSN string, auditor *audit.Notifier) *MetricsHandler {
 	return &MetricsHandler{
-		repo: repo,
+		repo:    repo,
+		auditor: auditor,
 	}
+}
+func (h *MetricsHandler) sendAudit(c echo.Context, metricNames []string) {
+	if h.auditor == nil {
+		return
+	}
+	ip := c.RealIP()
+	event := audit.NewEvent(metricNames, ip)
+	go func() {
+		_ = h.auditor.Notify(event)
+	}()
 }
 
 func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
@@ -60,6 +73,7 @@ func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Неверный тип метрики")
 	}
 
+	h.sendAudit(c, []string{metricName})
 	return c.NoContent(http.StatusOK)
 }
 
@@ -159,6 +173,7 @@ func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, "неверный тип метрики")
 	}
 
+	h.sendAudit(c, []string{m.ID})
 	return c.JSON(http.StatusOK, m)
 }
 
@@ -172,6 +187,11 @@ func (h *MetricsHandler) UpdatesMetricsJSON(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, "ошибка обновления метрик")
 	}
 
+	names := make([]string, 0, len(metrics))
+	for _, m := range metrics {
+		names = append(names, m.ID)
+	}
+	h.sendAudit(c, names)
 	return c.NoContent(http.StatusOK)
 }
 

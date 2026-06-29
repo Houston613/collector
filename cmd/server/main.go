@@ -1,6 +1,7 @@
 package main
 
 import (
+	"collector/internal/audit"
 	"collector/internal/handler"
 	"collector/internal/middleware"
 	"collector/internal/repository"
@@ -23,6 +24,8 @@ func main() {
 	restore := flag.Bool("r", true, "загружать ранее сохранённые метрики при старте")
 	dbDSN := flag.String("d", "", "строка подключения к базе данных")
 	key := flag.String("k", "", "ключ для подписи данных")
+	auditFilePath := flag.String("audit-file", "", "путь к файлу аудита. если пусто — аудит в файл отключён")
+	auditURL := flag.String("audit-url", "", "URL аудит-сервера. если пусто — аудит по HTTP отключён")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -52,6 +55,12 @@ func main() {
 	}
 	if v := os.Getenv("KEY"); v != "" {
 		*key = v
+	}
+	if v := os.Getenv("AUDIT_FILE"); v != "" {
+		*auditFilePath = v
+	}
+	if v := os.Getenv("AUDIT_URL"); v != "" {
+		*auditURL = v
 	}
 
 	// Собираем логгер
@@ -115,6 +124,32 @@ func main() {
 		log.Info("используется хранилище в памяти")
 	}
 
+	// Собираем аудитор: регистрируем наблюдателей по наличию конфига
+	var observers []audit.Observer
+	if *auditFilePath != "" {
+		fo, err := audit.NewFileObserver(*auditFilePath)
+		if err != nil {
+			log.Fatal("не удалось открыть файл аудита", zap.String("path", *auditFilePath), zap.Error(err))
+		}
+		observers = append(observers, fo)
+		log.Info("аудит в файл включён", zap.String("path", *auditFilePath))
+	}
+	if *auditURL != "" {
+		ho := audit.NewHTTPObserver(*auditURL)
+		observers = append(observers, ho)
+		log.Info("аудит по HTTP включён", zap.String("url", *auditURL))
+	}
+
+	var auditor *audit.Notifier
+	if len(observers) > 0 {
+		auditor = audit.NewNotifier(observers...)
+		defer func() {
+			if err := auditor.Close(); err != nil {
+				log.Error("ошибка закрытия", zap.Error(err))
+			}
+		}()
+	}
+
 	e := echo.New()
 	// логгер должен быть реализован через middleware
 	e.Use(middleware.RequestLogger(log))
@@ -123,7 +158,7 @@ func main() {
 	e.Use(middleware.SignatureMiddleware(*key, log))
 
 	//возможно стоит передавать конфиг вместо строки подключения, но пока так
-	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN)
+	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
 		log.Fatal("сервер завершил работу с ошибкой", zap.Error(err))

@@ -67,7 +67,7 @@ func (m *mockRepo) GetAllCounters(ctx context.Context) (map[string]int64, error)
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()
 	//в тестаз просто пока репозиторий
-	metricsHandler := NewMetricsHandler(repo, "")
+	metricsHandler := NewMetricsHandler(repo, "", nil)
 	metricsHandler.RegisterRoutes(e)
 	return e
 }
