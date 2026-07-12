@@ -25,11 +25,15 @@ import (
 )
 
 const (
-	DefaultServerAddress  = "localhost:8080"
-	DefaultPollInterval   = 2 * time.Second
+	// DefaultServerAddress is the default address of the metrics server.
+	DefaultServerAddress = "localhost:8080"
+	// DefaultPollInterval is the default frequency at which system metrics are gathered.
+	DefaultPollInterval = 2 * time.Second
+	// DefaultReportInterval is the default frequency at which gathered metrics are sent to the server.
 	DefaultReportInterval = 10 * time.Second
 )
 
+// Agent collects and periodically reports system runtime metrics to a server.
 type Agent struct {
 	mu              sync.RWMutex
 	gaugesMetrics   map[string]float64
@@ -43,6 +47,7 @@ type Agent struct {
 	log             *zap.Logger
 }
 
+// NewAgent creates and configures a new metrics Agent.
 func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
@@ -53,11 +58,12 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		key:             key,
 		rateLimit:       rateLimit,
 		client:          &http.Client{},
-		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
+		// Add logger to agent struct to log metric transmission errors
 		log: log,
 	}
 }
 
+// MetricsCollect gathers standard memory runtime statistics and stores them internally.
 func (a *Agent) MetricsCollect() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -92,11 +98,12 @@ func (a *Agent) MetricsCollect() {
 	a.gaugesMetrics["StackSys"] = float64(ms.StackSys)
 	a.gaugesMetrics["Sys"] = float64(ms.Sys)
 	a.gaugesMetrics["TotalAlloc"] = float64(ms.TotalAlloc)
-	//cлучайное значение
+	// Random value
 	a.gaugesMetrics["RandomValue"] = rand.Float64()
 	a.countersMetrics["PollCount"]++
 }
 
+// MetricsCollectGopsutil gathers additional system metrics like CPU utilization and memory using gopsutil.
 func (a *Agent) MetricsCollectGopsutil() {
 	v, err := mem.VirtualMemory()
 	if err != nil {
@@ -121,8 +128,9 @@ func (a *Agent) MetricsCollectGopsutil() {
 	}
 }
 
+// MetricsSend packages all gathered metrics and writes them to the jobs channel for shipping.
 func (a *Agent) MetricsSend(jobs chan<- []models.Metrics) {
-	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
+	// Copy metrics under RLock to prevent holding the lock during HTTP transmission
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
 	maps.Copy(gauges, a.gaugesMetrics)
@@ -162,7 +170,7 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal batch: %w", err)
 	}
-	// Сжимаем
+	// Compress the payload
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -208,15 +216,16 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	})
 }
 
+// Run starts the agent's main loops for collecting and sending metrics.
 func (a *Agent) Run() {
 	jobs := make(chan []models.Metrics, a.rateLimit)
 
-	// Воркеры для отправки метрик
+	// Workers for sending metrics
 	for i := 0; i < a.rateLimit; i++ {
 		go a.worker(jobs)
 	}
 
-	// Сбор метрик
+	// Collect metrics
 	go func() {
 		ticker := time.NewTicker(a.pollInterval)
 		defer ticker.Stop()
@@ -225,7 +234,7 @@ func (a *Agent) Run() {
 		}
 	}()
 
-	// Сбор gopsutil метрик
+	// Collect gopsutil metrics
 	go func() {
 		ticker := time.NewTicker(a.pollInterval)
 		defer ticker.Stop()
@@ -234,7 +243,7 @@ func (a *Agent) Run() {
 		}
 	}()
 
-	// Отправка метрик по тикеру
+	// Send metrics periodically
 	ticker := time.NewTicker(a.reportInterval)
 	defer ticker.Stop()
 	for range ticker.C {

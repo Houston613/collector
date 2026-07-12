@@ -21,25 +21,25 @@ var gzipWriterPool = sync.Pool{
 	},
 }
 
-// compressWriter — ленивый gzip-writer.
-// Решение о сжатии принимается в WriteHeader (когда Content-Type уже известен,
-// но заголовки ещё не отправлены клиенту).
+// compressWriter is a lazy gzip-writer.
+// The compression decision is made in WriteHeader (when the Content-Type is already known,
+// but the headers have not yet been sent to the client).
 type compressWriter struct {
 	http.ResponseWriter
 	gzWriter *gzip.Writer
-	compress bool // нужно ли сжимать — выясняется в WriteHeader
-	written  bool // были ли байты записаны через gzip
+	compress bool // whether to compress (determined in WriteHeader)
+	written  bool // whether any bytes were written via gzip
 }
 
-// compressibleContentType возвращает true для типов контента, которые нужно сжимать.
+// compressibleContentType returns true for content types that should be compressed.
 func compressibleContentType(ct string) bool {
 	return strings.HasPrefix(ct, "application/json") || strings.HasPrefix(ct, "text/html")
 }
 
-// WriteHeader перехватывает отправку статус-кода.
-// Echo устанавливает Content-Type ДО вызова WriteHeader, поэтому здесь
-// мы можем принять решение о сжатии и добавить Content-Encoding в заголовки
-// до их фиксации.
+// WriteHeader intercepts the sending of the status code.
+// Echo sets the Content-Type BEFORE calling WriteHeader, so here
+// we can decide whether to compress and add Content-Encoding to headers
+// before they are committed.
 func (w *compressWriter) WriteHeader(code int) {
 	if compressibleContentType(w.Header().Get("Content-Type")) {
 		w.compress = true
@@ -57,16 +57,16 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 	return w.gzWriter.Write(b)
 }
 
-// Close завершает gzip-поток только если через него что-то записывалось.
+// Close finishes the gzip stream only if something was written through it.
 func (w *compressWriter) Close() {
 	if w.written {
 		w.gzWriter.Close()
 	}
 }
 
-// GzipMiddleware распаковывает входящие gzip-запросы (Content-Encoding: gzip)
-// и сжимает ответы для клиентов, поддерживающих gzip (Accept-Encoding: gzip).
-// Сжатие применяется только для application/json и text/html.
+// GzipMiddleware decompresses incoming gzip requests (Content-Encoding: gzip)
+// and compresses responses for clients supporting gzip (Accept-Encoding: gzip).
+// Compression is only applied to application/json and text/html.
 func GzipMiddleware(log *zap.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -98,16 +98,16 @@ func GzipMiddleware(log *zap.Logger) echo.MiddlewareFunc {
 			res.Writer = grw
 
 			defer func() {
-				// Закрываем gzip-поток (если данные записывались).
+				// Close the gzip stream (if data was written).
 				grw.Close()
-				// Восстанавливаем оригинальный writer, чтобы Echo's HTTPErrorHandler,
-				// который запускается ПОСЛЕ возврата из middleware, мог писать
-				// ответ напрямую — без незакрытого gzip-потока.
-				// Если ответ уже зафиксирован (c.Response().Committed == true),
-				// HTTPErrorHandler сам пропустит запись, так что восстановление
-				// writer безопасно в обоих случаях.
+				// Restore the original writer so that Echo's HTTPErrorHandler,
+				// which runs AFTER returning from middleware, can write
+				// the response directly without an unclosed gzip stream.
+				// If the response is already committed (c.Response().Committed == true),
+				// HTTPErrorHandler will skip writing, so restoring the
+				// writer is safe in both cases.
 				res.Writer = origWriter
-				// Возвращаем gzip.Writer в пул
+				// Return gzip.Writer to the pool
 				gzipWriterPool.Put(gz)
 			}()
 

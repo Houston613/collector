@@ -18,22 +18,22 @@ import (
 )
 
 func main() {
-	addr := flag.String("a", "localhost:8080", "адрес HTTP-сервера")
-	storeInterval := flag.Int("i", 300, "интервал сохранения метрик на диск (секунды, 0 — синхронно)")
-	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "путь к файлу хранилища метрик")
-	restore := flag.Bool("r", true, "загружать ранее сохранённые метрики при старте")
-	dbDSN := flag.String("d", "", "строка подключения к базе данных")
-	key := flag.String("k", "", "ключ для подписи данных")
-	auditFilePath := flag.String("audit-file", "", "путь к файлу аудита. если пусто — аудит в файл отключён")
-	auditURL := flag.String("audit-url", "", "URL аудит-сервера. если пусто — аудит по HTTP отключён")
+	addr := flag.String("a", "localhost:8080", "HTTP server address")
+	storeInterval := flag.Int("i", 300, "metrics save interval (seconds, 0 for sync)")
+	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "path to metrics storage file")
+	restore := flag.Bool("r", true, "restore previously saved metrics on startup")
+	dbDSN := flag.String("d", "", "database connection DSN string")
+	key := flag.String("k", "", "key for data signing")
+	auditFilePath := flag.String("audit-file", "", "path to audit file (empty to disable file audit)")
+	auditURL := flag.String("audit-url", "", "audit server URL (empty to disable HTTP audit)")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "неизвестные аргументы: %v\n", flag.Args())
+		fmt.Fprintf(os.Stderr, "unknown arguments: %v\n", flag.Args())
 		os.Exit(1)
 	}
 
-	// Переменные окружения имеют приоритет над флагами
+	// Environment variables take precedence over command-line flags
 	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
 		*addr = envAddr
 	}
@@ -63,7 +63,7 @@ func main() {
 		*auditURL = v
 	}
 
-	// Собираем логгер
+	// Initialize the logger
 	cfg := zap.NewProductionEncoderConfig()
 	cfg.TimeKey = "timestamp"
 	cfg.EncodeLevel = zapcore.CapitalLevelEncoder
@@ -77,67 +77,67 @@ func main() {
 	))
 	defer log.Sync()
 
-	// Хранилище: БД, файловое или только в памяти
+	// Select storage back-end: DB, File, or In-Memory
 	var storage repository.MemRepository
 	ctx := context.Background()
 
 	if *dbDSN != "" {
 		dbStorage, err := repository.NewDBStorage(ctx, *dbDSN)
 		if err != nil {
-			log.Fatal("не удалось инициализировать БД", zap.Error(err))
+			log.Fatal("failed to initialize database", zap.Error(err))
 		}
 		if err := dbStorage.Bootstrap("migrations"); err != nil {
-			log.Fatal("не удалось выполнить миграции", zap.Error(err))
+			log.Fatal("failed to run database migrations", zap.Error(err))
 		}
 		storage = dbStorage
-		log.Info("используется хранилище в БД")
+		log.Info("using database storage backend")
 	} else if *fileStoragePath != "" {
 		fileStorage := repository.NewFileBackedStorage(*fileStoragePath, *storeInterval == 0, log)
 
 		if *restore {
 			if err := fileStorage.Load(); err != nil {
-				log.Warn("не удалось загрузить метрики из файла", zap.String("path", *fileStoragePath), zap.Error(err))
+				log.Warn("failed to load metrics from file", zap.String("path", *fileStoragePath), zap.Error(err))
 			} else {
-				log.Info("метрики загружены из файла", zap.String("path", *fileStoragePath))
+				log.Info("metrics loaded from file", zap.String("path", *fileStoragePath))
 			}
 		}
 
-		// Периодическое сохранение
+		// Periodic disk synchronization loop
 		if *storeInterval > 0 {
 			go func() {
 				ticker := time.NewTicker(time.Duration(*storeInterval) * time.Second)
 				defer ticker.Stop()
 				for range ticker.C {
 					if err := fileStorage.Save(); err != nil {
-						log.Error("ошибка сохранения метрик в файл", zap.String("path", *fileStoragePath), zap.Error(err))
+						log.Error("failed to save metrics to file", zap.String("path", *fileStoragePath), zap.Error(err))
 					} else {
-						log.Info("метрики сохранены в файл", zap.String("path", *fileStoragePath))
+						log.Info("metrics saved to file", zap.String("path", *fileStoragePath))
 					}
 				}
 			}()
 		}
 
 		storage = fileStorage
-		log.Info("используется файловое хранилище", zap.String("path", *fileStoragePath))
+		log.Info("using file-backed storage", zap.String("path", *fileStoragePath))
 	} else {
 		storage = repository.NewStructMem()
-		log.Info("используется хранилище в памяти")
+		log.Info("using in-memory storage backend")
 	}
 
-	// Собираем аудитор: регистрируем наблюдателей по наличию конфига
+	// Setup auditor: register observers based on configured parameters
 	var observers []audit.Observer
 	if *auditFilePath != "" {
 		fo, err := audit.NewFileObserver(*auditFilePath)
 		if err != nil {
-			log.Fatal("не удалось открыть файл аудита", zap.String("path", *auditFilePath), zap.Error(err))
+			log.Fatal("failed to open audit file", zap.String("path", *auditFilePath), zap.Error(err))
 		}
 		observers = append(observers, fo)
-		log.Info("аудит в файл включён", zap.String("path", *auditFilePath))
+		log.Info("file auditing enabled", zap.String("path", *auditFilePath))
 	}
 	if *auditURL != "" {
 		ho := audit.NewHTTPObserver(*auditURL)
 		observers = append(observers, ho)
-		log.Info("аудит по HTTP включён", zap.String("url", *auditURL))
+		log.Info("HTTP auditing enabled", zap.String("url", *auditURL))
 	}
 
 	var auditor *audit.Notifier
@@ -145,22 +145,22 @@ func main() {
 		auditor = audit.NewNotifier(observers...)
 		defer func() {
 			if err := auditor.Close(); err != nil {
-				log.Error("ошибка закрытия", zap.Error(err))
+				log.Error("failed to close auditor", zap.Error(err))
 			}
 		}()
 	}
 
 	e := echo.New()
-	// логгер должен быть реализован через middleware
+	// Logger is implemented via middleware
 	e.Use(middleware.RequestLogger(log))
-	// сначала сжимать, а потом подписывать
+	// Order of middleware: compress first, then sign
 	e.Use(middleware.GzipMiddleware(log))
 	e.Use(middleware.SignatureMiddleware(*key, log))
 
-	//возможно стоит передавать конфиг вместо строки подключения, но пока так
+	// TODO: Pass configuration object instead of connection DSN string directly
 	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
-		log.Fatal("сервер завершил работу с ошибкой", zap.Error(err))
+		log.Fatal("server stopped with error", zap.Error(err))
 	}
 }

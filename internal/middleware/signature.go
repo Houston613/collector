@@ -54,7 +54,7 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 				return next(c)
 			}
 
-			// Пропускаем GET запросы, так как у них нет тела
+			// Skip GET requests as they don't have a body
 			if c.Request().Method == http.MethodGet {
 				return next(c)
 			}
@@ -64,7 +64,7 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 				reqHash = c.Request().Header.Get("Hash")
 			}
 
-			// Если заголовок отсутствует, пропускаем проверку
+			// If the header is missing, skip validation
 			if reqHash == "" {
 				return handleWithSignature(c, next, key, log)
 			}

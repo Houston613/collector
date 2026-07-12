@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// FileObserver — наблюдатель, записывающий события аудита в файл.
+// FileObserver writes audit events to a file.
 type FileObserver struct {
 	mu   sync.Mutex
 	file *os.File

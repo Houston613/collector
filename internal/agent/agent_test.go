@@ -29,10 +29,9 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 	a.MetricsCollect()
 
-	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
-	//
+	// Lock is set to simulate a production-like concurrent access scenario
 	a.mu.RLock()
-	//здесь уже можно defer, потому-что тест может завершиться раньше цикла
+	// Using defer here as the test method may exit before the loop completes
 	defer a.mu.RUnlock()
 
 	for _, name := range expectedGauges {
@@ -40,7 +39,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 	}
 }
 
-// напиши такой же тест для gauge
+// TestMetricsCollect_IncrementsPollCount verifies that PollCount increments correctly.
 func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -143,7 +142,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 				assert.Equal(t, http.MethodPost, r.Method)
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
-				// Проверяем, что клиент поддерживает gzip-ответы
+				// Check if request is gzip compressed
 				var reader io.Reader = r.Body
 				if r.Header.Get("Content-Encoding") == "gzip" {
 					gr, err := gzip.NewReader(r.Body)
@@ -163,7 +162,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			//NewNop - это заглушка для логгера, которая не будет ничего выводить. Это полезно в тестах, чтобы не засорять вывод.
+			// Use zap.NewNop() to suppress logger outputs in tests and keep output clean
 			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			a.mu.Lock()
 			maps.Copy(a.gaugesMetrics, tt.gauges)

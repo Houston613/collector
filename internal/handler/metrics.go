@@ -15,11 +15,13 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// MetricsHandler coordinates HTTP requests for reading and writing metrics.
 type MetricsHandler struct {
 	repo    repository.MemRepository
 	auditor *audit.Notifier
 }
 
+// NewMetricsHandler creates and configures a new MetricsHandler.
 func NewMetricsHandler(repo repository.MemRepository, dbDSN string, auditor *audit.Notifier) *MetricsHandler {
 	return &MetricsHandler{
 		repo:    repo,
@@ -37,6 +39,7 @@ func (h *MetricsHandler) sendAudit(c echo.Context, metricNames []string) {
 	}()
 }
 
+// UpdateMetrics handles plaintext requests to update a single metric: POST /update/{type}/{name}/{value}.
 func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
 	ct := c.Request().Header.Get("Content-Type")
 	if ct != "" {
@@ -77,6 +80,7 @@ func (h *MetricsHandler) UpdateMetrics(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+// GetMetric returns a handler that retrieves a single metric's plaintext value: GET /value/{type}/{name}.
 func GetMetric(repo repository.MemRepository) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		metricType := c.Param("type")
@@ -109,6 +113,7 @@ func GetMetric(repo repository.MemRepository) echo.HandlerFunc {
 	}
 }
 
+// ListMetrics returns a handler that renders an HTML list of all current metrics: GET /.
 func ListMetrics(repo repository.MemRepository) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		var sb strings.Builder
@@ -134,11 +139,12 @@ func ListMetrics(repo repository.MemRepository) echo.HandlerFunc {
 	}
 }
 
+// Ping checks the health of the backing storage: GET /ping.
 func (h *MetricsHandler) Ping(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 1*time.Second)
 	defer cancel()
 
-	// Проверяем, реализует ли репозиторий интерфейс Pinger, и если да, то вызываем метод Ping для проверки доступности хранилища.
+	// Check if the repository implements the Pinger interface, and if so, call Ping to verify storage accessibility.
 	if pinger, ok := h.repo.(repository.Pinger); ok {
 		if err := pinger.Ping(ctx); err != nil {
 			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to ping storage: %v", err))
@@ -148,6 +154,7 @@ func (h *MetricsHandler) Ping(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+// UpdateMetricJSON updates a single metric sent in the JSON body: POST /update.
 func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 	var m models.Metrics
 	if err := c.Bind(&m); err != nil {
@@ -177,6 +184,7 @@ func (h *MetricsHandler) UpdateMetricJSON(c echo.Context) error {
 	return c.JSON(http.StatusOK, m)
 }
 
+// UpdatesMetricsJSON updates multiple metrics in a batch operation from a JSON body: POST /updates.
 func (h *MetricsHandler) UpdatesMetricsJSON(c echo.Context) error {
 	var metrics []models.Metrics
 	if err := c.Bind(&metrics); err != nil {
@@ -195,7 +203,7 @@ func (h *MetricsHandler) UpdatesMetricsJSON(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-// GetMetricJSON принимает JSON с ID и MType, возвращает JSON с заполнением значением.
+// GetMetricJSON retrieves a single metric's value using a JSON query payload: POST /value.
 func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 	var m models.Metrics
 	if err := c.Bind(&m); err != nil {
@@ -227,6 +235,7 @@ func (h *MetricsHandler) GetMetricJSON(c echo.Context) error {
 	return c.JSON(http.StatusOK, m)
 }
 
+// RegisterRoutes registers all metric endpoints and routes onto the Echo instance.
 func (h *MetricsHandler) RegisterRoutes(e *echo.Echo) {
 	e.POST("/update/:type/:name/:value", h.UpdateMetrics)
 	e.POST("/update", h.UpdateMetricJSON)

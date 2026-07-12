@@ -1,20 +1,20 @@
-// Субъект (Notifier) хранит список наблюдателей (Observer) и уведомляет их
-// после успешной обработки каждого пакета метрик.
+// Package audit implements the observer pattern for auditing metric events.
+// The Notifier stores a list of Observers and notifies them after each successfully processed metrics batch.
 package audit
 
 import "time"
 
-// AuditEvent — событие аудита, сформированное после успешного обновления метрик.
+// AuditEvent represents an audit event created after successfully updating metrics.
 type AuditEvent struct {
-	// TS — unix timestamp события (секунды).
+	// TS is the unix timestamp of the event (seconds).
 	TS int64 `json:"ts"`
-	// Metrics — список наименований полученных метрик.
+	// Metrics is the list of metric names received.
 	Metrics []string `json:"metrics"`
-	// IPAddress — IP-адрес входящего запроса.
+	// IPAddress is the IP address of the incoming request.
 	IPAddress string `json:"ip_address"`
 }
 
-// NewEvent создаёт новое событие аудита с текущим unix timestamp.
+// NewEvent creates a new audit event with the current unix timestamp.
 func NewEvent(metrics []string, ipAddress string) AuditEvent {
 	return AuditEvent{
 		TS:        time.Now().Unix(),
@@ -23,7 +23,7 @@ func NewEvent(metrics []string, ipAddress string) AuditEvent {
 	}
 }
 
-// Observer — интерфейс наблюдателя. Каждая реализация знает, как записать событие аудита в свой приёмник.
+// Observer defines the interface for an observer that records audit events to its destination.
 type Observer interface {
 	Notify(event AuditEvent) error
 	Close() error
@@ -41,7 +41,7 @@ func (n *Notifier) Register(o Observer) {
 	n.observers = append(n.observers, o)
 }
 
-// Notify рассылает событие всем зарегистрированным наблюдателям.
+// Notify sends the event to all registered observers.
 func (n *Notifier) Notify(event AuditEvent) error {
 	var firstErr error
 	for _, o := range n.observers {
@@ -52,7 +52,7 @@ func (n *Notifier) Notify(event AuditEvent) error {
 	return firstErr
 }
 
-// Close закрывает все наблюдатели.
+// Close closes all registered observers.
 func (n *Notifier) Close() error {
 	var firstErr error
 	for _, o := range n.observers {
