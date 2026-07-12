@@ -5,10 +5,21 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
+
+var gzipWriterPool = sync.Pool{
+	New: func() interface{} {
+		gz, err := gzip.NewWriterLevel(io.Discard, gzip.BestCompression)
+		if err != nil {
+			panic(err)
+		}
+		return gz
+	},
+}
 
 // compressWriter — ленивый gzip-writer.
 // Решение о сжатии принимается в WriteHeader (когда Content-Type уже известен,
@@ -77,11 +88,8 @@ func GzipMiddleware(log *zap.Logger) echo.MiddlewareFunc {
 
 			origWriter := res.Writer
 
-			gz, err := gzip.NewWriterLevel(origWriter, gzip.BestCompression)
-			if err != nil {
-				log.Error("failed to create gzip writer", zap.Error(err))
-				return err
-			}
+			gz := gzipWriterPool.Get().(*gzip.Writer)
+			gz.Reset(origWriter)
 
 			grw := &compressWriter{
 				ResponseWriter: origWriter,
@@ -99,6 +107,8 @@ func GzipMiddleware(log *zap.Logger) echo.MiddlewareFunc {
 				// HTTPErrorHandler сам пропустит запись, так что восстановление
 				// writer безопасно в обоих случаях.
 				res.Writer = origWriter
+				// Возвращаем gzip.Writer в пул
+				gzipWriterPool.Put(gz)
 			}()
 
 			return next(c)
