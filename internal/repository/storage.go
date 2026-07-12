@@ -13,7 +13,7 @@ type StructMem struct {
 	counters map[string]int64
 }
 
-//интерфейс для проверки доступности хранилища
+// интерфейс для проверки доступности хранилища
 type Pinger interface {
 	Ping(ctx context.Context) error
 }

@@ -18,7 +18,7 @@ func BenchmarkUpdateGauge(b *testing.B) {
 func BenchmarkUpdateCounter(b *testing.B) {
 	ctx := context.Background()
 	s := NewStructMem()
-	
+
 	for i := 0; b.Loop(); i++ {
 		s.UpdateCounter(ctx, "PollCount", int64(i))
 	}

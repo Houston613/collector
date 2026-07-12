@@ -12,6 +12,7 @@ type FileObserver struct {
 	file *os.File
 	enc  *json.Encoder
 }
+
 func NewFileObserver(path string) (*FileObserver, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
