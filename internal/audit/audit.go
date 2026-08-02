@@ -2,7 +2,13 @@
 // The Notifier stores a list of Observers and notifies them after each successfully processed metrics batch.
 package audit
 
-import "time"
+import (
+	"errors"
+	"sync"
+	"time"
+
+	"go.uber.org/zap"
+)
 
 // AuditEvent represents an audit event created after successfully updating metrics.
 type AuditEvent struct {
@@ -31,18 +37,56 @@ type Observer interface {
 
 type Notifier struct {
 	observers []Observer
+	events    chan AuditEvent
+	wg        sync.WaitGroup
+	log       *zap.Logger
 }
 
-func NewNotifier(observers ...Observer) *Notifier {
-	return &Notifier{observers: observers}
+// NewNotifier creates a Notifier with default worker pool (5 workers, buffer 1000).
+func NewNotifier(log *zap.Logger, observers ...Observer) *Notifier {
+	return NewNotifierWithPool(log, 5, 1000, observers...)
 }
 
-func (n *Notifier) Register(o Observer) {
-	n.observers = append(n.observers, o)
+// NewNotifierWithPool creates a Notifier with custom worker pool size and buffer capacity.
+func NewNotifierWithPool(log *zap.Logger, workers, bufferSize int, observers ...Observer) *Notifier {
+	if workers <= 0 {
+		workers = 5
+	}
+	if bufferSize <= 0 {
+		bufferSize = 1000
+	}
+	if log == nil {
+		log = zap.NewNop()
+	}
+
+	n := &Notifier{
+		observers: observers,
+		events:    make(chan AuditEvent, bufferSize),
+		log:       log,
+	}
+
+	for i := 0; i < workers; i++ {
+		n.wg.Add(1)
+		go n.worker()
+	}
+
+	return n
 }
 
-// Notify sends the event to all registered observers.
-func (n *Notifier) Notify(event AuditEvent) error {
+func (n *Notifier) worker() {
+	defer n.wg.Done()
+	for event := range n.events {
+		if err := n.notifyObservers(event); err != nil {
+			n.log.Error("failed to deliver audit event to observers",
+				zap.Error(err),
+				zap.Strings("metrics", event.Metrics),
+				zap.String("ip", event.IPAddress),
+			)
+		}
+	}
+}
+
+func (n *Notifier) notifyObservers(event AuditEvent) error {
 	var firstErr error
 	for _, o := range n.observers {
 		if err := o.Notify(event); err != nil && firstErr == nil {
@@ -52,8 +96,32 @@ func (n *Notifier) Notify(event AuditEvent) error {
 	return firstErr
 }
 
-// Close closes all registered observers.
+func (n *Notifier) Register(o Observer) {
+	n.observers = append(n.observers, o)
+}
+
+// Notify enqueues the event to be processed asynchronously by the worker pool.
+// If the buffer is full, it drops the event and logs a warning to prevent blocking the HTTP handler.
+func (n *Notifier) Notify(event AuditEvent) error {
+	select {
+	case n.events <- event:
+		return nil
+	default:
+		err := errors.New("audit event buffer full")
+		n.log.Warn("audit event dropped due to full buffer",
+			zap.Error(err),
+			zap.Strings("metrics", event.Metrics),
+			zap.String("ip", event.IPAddress),
+		)
+		return err
+	}
+}
+
+// Close drains remaining events, waits for workers to finish, and closes observers.
 func (n *Notifier) Close() error {
+	close(n.events)
+	n.wg.Wait()
+
 	var firstErr error
 	for _, o := range n.observers {
 		if err := o.Close(); err != nil && firstErr == nil {
@@ -62,3 +130,5 @@ func (n *Notifier) Close() error {
 	}
 	return firstErr
 }
+
+

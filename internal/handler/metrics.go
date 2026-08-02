@@ -13,19 +13,30 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
+
+// Auditor defines the interface required by MetricsHandler to emit audit events.
+type Auditor interface {
+	Notify(event audit.AuditEvent) error
+}
 
 // MetricsHandler coordinates HTTP requests for reading and writing metrics.
 type MetricsHandler struct {
 	repo    repository.MemRepository
-	auditor *audit.Notifier
+	auditor Auditor
+	log     *zap.Logger
 }
 
 // NewMetricsHandler creates and configures a new MetricsHandler.
-func NewMetricsHandler(repo repository.MemRepository, dbDSN string, auditor *audit.Notifier) *MetricsHandler {
+func NewMetricsHandler(repo repository.MemRepository, dbDSN string, auditor Auditor, log *zap.Logger) *MetricsHandler {
+	if log == nil {
+		log = zap.NewNop()
+	}
 	return &MetricsHandler{
 		repo:    repo,
 		auditor: auditor,
+		log:     log,
 	}
 }
 func (h *MetricsHandler) sendAudit(c echo.Context, metricNames []string) {
@@ -34,9 +45,13 @@ func (h *MetricsHandler) sendAudit(c echo.Context, metricNames []string) {
 	}
 	ip := c.RealIP()
 	event := audit.NewEvent(metricNames, ip)
-	go func() {
-		_ = h.auditor.Notify(event)
-	}()
+	if err := h.auditor.Notify(event); err != nil {
+		h.log.Warn("failed to enqueue audit event",
+			zap.Error(err),
+			zap.Strings("metrics", metricNames),
+			zap.String("ip", ip),
+		)
+	}
 }
 
 // UpdateMetrics handles plaintext requests to update a single metric: POST /update/{type}/{name}/{value}.

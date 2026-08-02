@@ -3,19 +3,43 @@ package middleware
 import (
 	"bytes"
 	"collector/pkg/signature"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"hash"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
+var bufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
+
 type signatureWriter struct {
 	http.ResponseWriter
 	buffer     *bytes.Buffer
-	key        string
+	hmac       hash.Hash
+	writer     io.Writer
 	statusCode int
 	committed  bool
+}
+
+func newSignatureWriter(w http.ResponseWriter, key string) *signatureWriter {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	mac := hmac.New(sha256.New, []byte(key))
+	return &signatureWriter{
+		ResponseWriter: w,
+		buffer:         buf,
+		hmac:           mac,
+		writer:         io.MultiWriter(buf, mac),
+	}
 }
 
 func (w *signatureWriter) WriteHeader(code int) {
@@ -26,16 +50,17 @@ func (w *signatureWriter) WriteHeader(code int) {
 }
 
 func (w *signatureWriter) Write(b []byte) (int, error) {
-	return w.buffer.Write(b)
+	return w.writer.Write(b)
 }
 
 func (w *signatureWriter) Flush() error {
 	if w.committed {
 		return nil
 	}
+	defer bufferPool.Put(w.buffer)
 
-	hash := signature.Sign(w.buffer.Bytes(), w.key)
-	w.Header().Set("HashSHA256", hash)
+	hashStr := hex.EncodeToString(w.hmac.Sum(nil))
+	w.Header().Set("HashSHA256", hashStr)
 
 	if w.statusCode == 0 {
 		w.statusCode = http.StatusOK
@@ -95,11 +120,7 @@ func SignatureMiddleware(key string, log *zap.Logger) echo.MiddlewareFunc {
 
 func handleWithSignature(c echo.Context, next echo.HandlerFunc, key string, log *zap.Logger) error {
 	originalWriter := c.Response().Writer
-	sigWriter := &signatureWriter{
-		ResponseWriter: originalWriter,
-		buffer:         new(bytes.Buffer),
-		key:            key,
-	}
+	sigWriter := newSignatureWriter(originalWriter, key)
 	c.Response().Writer = sigWriter
 
 	err := next(c)
@@ -118,3 +139,4 @@ func handleWithSignature(c echo.Context, next echo.HandlerFunc, key string, log 
 
 	return err
 }
+

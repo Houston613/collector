@@ -70,7 +70,7 @@ func (m *mockRepo) GetAllCounters(ctx context.Context) (map[string]int64, error)
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()
 	// In tests, just use the repository mock for now
-	metricsHandler := NewMetricsHandler(repo, "", nil)
+	metricsHandler := NewMetricsHandler(repo, "", nil, nil)
 	metricsHandler.RegisterRoutes(e)
 	return e
 }
@@ -416,7 +416,7 @@ func TestUpdatesMetricsJSON_OK(t *testing.T) {
 // with a repository.
 func ExampleNewMetricsHandler() {
 	repo := repository.NewStructMem()
-	h := NewMetricsHandler(repo, "", nil)
+	h := NewMetricsHandler(repo, "", nil, nil)
 
 	fmt.Printf("Handler initialized: %T\n", h)
 	// Output:
@@ -427,7 +427,7 @@ func ExampleNewMetricsHandler() {
 // with an Echo router and handle a sequence of plaintext and JSON requests.
 func ExampleMetricsHandler_RegisterRoutes() {
 	repo := repository.NewStructMem()
-	h := NewMetricsHandler(repo, "", nil)
+	h := NewMetricsHandler(repo, "", nil, nil)
 
 	e := echo.New()
 	h.RegisterRoutes(e)
@@ -469,7 +469,7 @@ func ExampleMetricsHandler_RegisterRoutes() {
 // metrics using the plaintext REST endpoints.
 func ExampleMetricsHandler_UpdateMetrics() {
 	repo := repository.NewStructMem()
-	h := NewMetricsHandler(repo, "", nil)
+	h := NewMetricsHandler(repo, "", nil, nil)
 	e := echo.New()
 	h.RegisterRoutes(e)
 
@@ -496,7 +496,7 @@ func ExampleMetricsHandler_UpdateMetrics() {
 // metrics using JSON payloads.
 func ExampleMetricsHandler_UpdateMetricJSON() {
 	repo := repository.NewStructMem()
-	h := NewMetricsHandler(repo, "", nil)
+	h := NewMetricsHandler(repo, "", nil, nil)
 	e := echo.New()
 	h.RegisterRoutes(e)
 

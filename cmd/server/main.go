@@ -142,7 +142,7 @@ func main() {
 
 	var auditor *audit.Notifier
 	if len(observers) > 0 {
-		auditor = audit.NewNotifier(observers...)
+		auditor = audit.NewNotifier(log, observers...)
 		defer func() {
 			if err := auditor.Close(); err != nil {
 				log.Error("failed to close auditor", zap.Error(err))
@@ -158,7 +158,7 @@ func main() {
 	e.Use(middleware.SignatureMiddleware(*key, log))
 
 	// TODO: Pass configuration object instead of connection DSN string directly
-	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor)
+	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor, log)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
 		log.Fatal("server stopped with error", zap.Error(err))
