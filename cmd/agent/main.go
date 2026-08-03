@@ -13,7 +13,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent error: %v\n", err)
+	}
+}
 
+func run() error {
 	// Parse command-line flags
 	addr := flag.String("a", "localhost:8080", "HTTP server address")
 	reportInterval := flag.Int("r", 10, "frequency of metric reports (seconds)")
@@ -24,8 +29,7 @@ func main() {
 
 	// Check for unexpected positional arguments
 	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "unknown arguments: %v\n", flag.Args())
-		os.Exit(1)
+		return fmt.Errorf("unknown arguments: %v", flag.Args())
 	}
 
 	// Environment variables take precedence over command-line flags
@@ -75,4 +79,5 @@ func main() {
 		log,
 	)
 	a.Run()
+	return nil
 }

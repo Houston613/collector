@@ -412,6 +412,32 @@ func TestUpdatesMetricsJSON_OK(t *testing.T) {
 	assert.Equal(t, int64(10), repo.counters["Counter1"])
 }
 
+func TestListMetrics(t *testing.T) {
+	repo := newMockRepo()
+	repo.gauges["Alloc"] = 100.5
+	repo.counters["PollCount"] = 5
+	e := newEcho(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Alloc = 100.5")
+	assert.Contains(t, rec.Body.String(), "PollCount = 5")
+}
+
+func TestPing(t *testing.T) {
+	repo := newMockRepo()
+	e := newEcho(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 // ExampleNewMetricsHandler demonstrates how to initialize a new MetricsHandler
 // with a repository.
 func ExampleNewMetricsHandler() {

@@ -18,6 +18,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+	}
+}
+
+func run() error {
 	addr := flag.String("a", "localhost:8080", "HTTP server address")
 	storeInterval := flag.Int("i", 300, "metrics save interval (seconds, 0 for sync)")
 	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "path to metrics storage file")
@@ -29,8 +35,7 @@ func main() {
 	flag.Parse()
 
 	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "unknown arguments: %v\n", flag.Args())
-		os.Exit(1)
+		return fmt.Errorf("unknown arguments: %v", flag.Args())
 	}
 
 	// Environment variables take precedence over command-line flags
@@ -84,10 +89,10 @@ func main() {
 	if *dbDSN != "" {
 		dbStorage, err := repository.NewDBStorage(ctx, *dbDSN)
 		if err != nil {
-			log.Fatal("failed to initialize database", zap.Error(err))
+			return fmt.Errorf("failed to initialize database: %w", err)
 		}
 		if err := dbStorage.Bootstrap("migrations"); err != nil {
-			log.Fatal("failed to run database migrations", zap.Error(err))
+			return fmt.Errorf("failed to run database migrations: %w", err)
 		}
 		storage = dbStorage
 		log.Info("using database storage backend")
@@ -129,7 +134,7 @@ func main() {
 	if *auditFilePath != "" {
 		fo, err := audit.NewFileObserver(*auditFilePath)
 		if err != nil {
-			log.Fatal("failed to open audit file", zap.String("path", *auditFilePath), zap.Error(err))
+			return fmt.Errorf("failed to open audit file: %w", err)
 		}
 		observers = append(observers, fo)
 		log.Info("file auditing enabled", zap.String("path", *auditFilePath))
@@ -161,6 +166,8 @@ func main() {
 	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor, log)
 	metricsHandler.RegisterRoutes(e)
 	if err := e.Start(*addr); err != nil {
-		log.Fatal("server stopped with error", zap.Error(err))
+		log.Error("server stopped with error", zap.Error(err))
+		return err
 	}
+	return nil
 }
