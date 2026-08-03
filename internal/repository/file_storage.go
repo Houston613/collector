@@ -10,15 +10,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// переиспользуем StructMem, чтобы не дублировать код по работе с метриками в памяти
+// FileBackedStorage extends StructMem with functionality to persist metrics to a file on disk.
 type FileBackedStorage struct {
 	*StructMem
 	filePath string
-	syncMode bool // true → сохранять на диск после каждой записи (storeInterval == 0)
+	syncMode bool // true to save to disk after every write (storeInterval == 0)
 	fileMu   sync.Mutex
 	log      *zap.Logger
 }
 
+// NewFileBackedStorage creates and returns a new FileBackedStorage instance.
 func NewFileBackedStorage(filePath string, syncMode bool, log *zap.Logger) *FileBackedStorage {
 	return &FileBackedStorage{
 		StructMem: NewStructMem(),
@@ -28,40 +29,43 @@ func NewFileBackedStorage(filePath string, syncMode bool, log *zap.Logger) *File
 	}
 }
 
+// UpdateGauge updates a gauge metric and persists the state if syncMode is enabled.
 func (f *FileBackedStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	f.StructMem.UpdateGauge(ctx, name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
-			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			f.log.Error("failed to synchronize metrics", zap.String("path", f.filePath), zap.Error(err))
 			return err
 		}
 	}
 	return nil
 }
 
+// UpdateCounter updates a counter metric and persists the state if syncMode is enabled.
 func (f *FileBackedStorage) UpdateCounter(ctx context.Context, name string, value int64) error {
 	f.StructMem.UpdateCounter(ctx, name, value)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
-			f.log.Error("не удалость синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			f.log.Error("failed to synchronize metrics", zap.String("path", f.filePath), zap.Error(err))
 			return err
 		}
 	}
 	return nil
 }
 
+// UpdateMetrics updates multiple metrics and persists the state if syncMode is enabled.
 func (f *FileBackedStorage) UpdateMetrics(ctx context.Context, metrics []models.Metrics) error {
 	f.StructMem.UpdateMetrics(ctx, metrics)
 	if f.syncMode {
 		if err := f.Save(); err != nil {
-			f.log.Error("не удалось синхронизировать метрики", zap.String("path", f.filePath), zap.Error(err))
+			f.log.Error("failed to synchronize metrics", zap.String("path", f.filePath), zap.Error(err))
 			return err
 		}
 	}
 	return nil
 }
 
-// Save сериализует все текущие метрики в JSON и записывает в файл.
+// Save serializes all current metrics to JSON and writes them to a file.
 func (f *FileBackedStorage) Save() error {
 	ctx := context.Background()
 	gauges, _ := f.GetAllGauges(ctx)
@@ -87,8 +91,8 @@ func (f *FileBackedStorage) Save() error {
 	return os.WriteFile(f.filePath, data, 0644)
 }
 
-// Load читает метрики из файла и загружает их в хранилище.
-// Если файл не существует — не ошибка, просто ничего не загружается.
+// Load reads metrics from a file and loads them into memory.
+// If the file does not exist, it is not an error; it simply skips loading.
 func (f *FileBackedStorage) Load() error {
 	f.fileMu.Lock()
 	data, err := os.ReadFile(f.filePath)

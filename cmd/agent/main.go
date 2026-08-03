@@ -14,21 +14,21 @@ import (
 
 func main() {
 
-	//информация из флагов при запуске
-	addr := flag.String("a", "localhost:8080", "адрес HTTP-сервера")
-	reportInterval := flag.Int("r", 10, "частота отправки метрик")
-	pollInterval := flag.Int("p", 2, "частота опроса метрик")
+	// Parse command-line flags
+	addr := flag.String("a", "localhost:8080", "HTTP server address")
+	reportInterval := flag.Int("r", 10, "frequency of metric reports (seconds)")
+	pollInterval := flag.Int("p", 2, "frequency of metric polling (seconds)")
+	key := flag.String("k", "", "key for data signing")
+	rateLimit := flag.Int("l", 3, "rate limit for outgoing concurrent requests")
 	flag.Parse()
 
-	//если подали "непонятные" аргументы, то сообщаем об этом и завершаем программу
-	//если не подали, пофиг
+	// Check for unexpected positional arguments
 	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "неизвестные аргументы: %v\n", flag.Args())
+		fmt.Fprintf(os.Stderr, "unknown arguments: %v\n", flag.Args())
 		os.Exit(1)
 	}
 
-	// Переменные окружения имеют приоритет над флагами
-	//поэтому если они есть - перезатрут стнадартные значения
+	// Environment variables take precedence over command-line flags
 	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
 		*addr = envAddr
 	}
@@ -42,8 +42,16 @@ func main() {
 			*pollInterval = v
 		}
 	}
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*key = envKey
+	}
+	if envRateLimit := os.Getenv("RATE_LIMIT"); envRateLimit != "" {
+		if v, err := strconv.Atoi(envRateLimit); err == nil {
+			*rateLimit = v
+		}
+	}
 
-	// Собираем логгер
+	// Initialize the logger
 	cfg := zap.NewProductionEncoderConfig()
 	cfg.TimeKey = "timestamp"
 	cfg.EncodeLevel = zapcore.CapitalLevelEncoder
@@ -58,10 +66,12 @@ func main() {
 	defer log.Sync()
 
 	a := agent.NewAgent(
-		//передаем только URL, сами решаем, что это будет http
+		// Prepend the http:// protocol scheme to the address
 		"http://"+*addr,
 		time.Duration(*pollInterval)*time.Second,
 		time.Duration(*reportInterval)*time.Second,
+		*key,
+		*rateLimit,
 		log,
 	)
 	a.Run()

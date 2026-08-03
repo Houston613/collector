@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	models "collector/internal/model"
+	"collector/internal/repository"
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -66,8 +69,8 @@ func (m *mockRepo) GetAllCounters(ctx context.Context) (map[string]int64, error)
 }
 func newEcho(repo *mockRepo) *echo.Echo {
 	e := echo.New()
-	//в тестаз просто пока репозиторий
-	metricsHandler := NewMetricsHandler(repo, "")
+	// In tests, just use the repository mock for now
+	metricsHandler := NewMetricsHandler(repo, "", nil, nil)
 	metricsHandler.RegisterRoutes(e)
 	return e
 }
@@ -407,4 +410,115 @@ func TestUpdatesMetricsJSON_OK(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 123.45, repo.gauges["Gauge1"])
 	assert.Equal(t, int64(10), repo.counters["Counter1"])
+}
+
+// ExampleNewMetricsHandler demonstrates how to initialize a new MetricsHandler
+// with a repository.
+func ExampleNewMetricsHandler() {
+	repo := repository.NewStructMem()
+	h := NewMetricsHandler(repo, "", nil, nil)
+
+	fmt.Printf("Handler initialized: %T\n", h)
+	// Output:
+	// Handler initialized: *handler.MetricsHandler
+}
+
+// ExampleMetricsHandler_RegisterRoutes demonstrates how to register handler routes
+// with an Echo router and handle a sequence of plaintext and JSON requests.
+func ExampleMetricsHandler_RegisterRoutes() {
+	repo := repository.NewStructMem()
+	h := NewMetricsHandler(repo, "", nil, nil)
+
+	e := echo.New()
+	h.RegisterRoutes(e)
+
+	// 1. Send a plaintext POST request to update a gauge metric
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/update/gauge/Alloc/12.34", nil)
+	reqUpdate.Header.Set("Content-Type", "text/plain")
+	recUpdate := httptest.NewRecorder()
+	e.ServeHTTP(recUpdate, reqUpdate)
+	fmt.Printf("Plaintext Update Status: %d\n", recUpdate.Code)
+
+	// 2. Send a plaintext GET request to retrieve the metric value
+	reqGet := httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil)
+	recGet := httptest.NewRecorder()
+	e.ServeHTTP(recGet, reqGet)
+	fmt.Printf("Plaintext Get Status: %d, Value: %s\n", recGet.Code, recGet.Body.String())
+
+	// 3. Send a JSON POST request to update a counter metric
+	gaugeValue := 12.34
+	metric := models.Metrics{
+		ID:    "Alloc",
+		MType: models.Gauge,
+		Value: &gaugeValue,
+	}
+	body, _ := json.Marshal(metric)
+	reqJSONUpdate := httptest.NewRequest(http.MethodPost, "/update", bytes.NewReader(body))
+	reqJSONUpdate.Header.Set("Content-Type", "application/json")
+	recJSONUpdate := httptest.NewRecorder()
+	e.ServeHTTP(recJSONUpdate, reqJSONUpdate)
+	fmt.Printf("JSON Update Status: %d\n", recJSONUpdate.Code)
+
+	// Output:
+	// Plaintext Update Status: 200
+	// Plaintext Get Status: 200, Value: 12.34
+	// JSON Update Status: 200
+}
+
+// ExampleMetricsHandler_UpdateMetrics demonstrates how to update and retrieve
+// metrics using the plaintext REST endpoints.
+func ExampleMetricsHandler_UpdateMetrics() {
+	repo := repository.NewStructMem()
+	h := NewMetricsHandler(repo, "", nil, nil)
+	e := echo.New()
+	h.RegisterRoutes(e)
+
+	// Send a POST request to update the PollCount counter
+	req := httptest.NewRequest(http.MethodPost, "/update/counter/PollCount/10", nil)
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	fmt.Printf("Status: %d\n", rec.Code)
+
+	// Retrieve the counter
+	reqGet := httptest.NewRequest(http.MethodGet, "/value/counter/PollCount", nil)
+	recGet := httptest.NewRecorder()
+	e.ServeHTTP(recGet, reqGet)
+	fmt.Printf("Value: %s\n", recGet.Body.String())
+
+	// Output:
+	// Status: 200
+	// Value: 10
+}
+
+// ExampleMetricsHandler_UpdateMetricJSON demonstrates how to update and retrieve
+// metrics using JSON payloads.
+func ExampleMetricsHandler_UpdateMetricJSON() {
+	repo := repository.NewStructMem()
+	h := NewMetricsHandler(repo, "", nil, nil)
+	e := echo.New()
+	h.RegisterRoutes(e)
+
+	// Update counter using JSON
+	jsonUpdateBody := `{"id": "PollCount", "type": "counter", "delta": 5}`
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/update", strings.NewReader(jsonUpdateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	recUpdate := httptest.NewRecorder()
+	e.ServeHTTP(recUpdate, reqUpdate)
+
+	// Get counter using JSON
+	jsonValueBody := `{"id": "PollCount", "type": "counter"}`
+	reqValue := httptest.NewRequest(http.MethodPost, "/value", strings.NewReader(jsonValueBody))
+	reqValue.Header.Set("Content-Type", "application/json")
+	recValue := httptest.NewRecorder()
+	e.ServeHTTP(recValue, reqValue)
+
+	var response models.Metrics
+	_ = json.Unmarshal(recValue.Body.Bytes(), &response)
+
+	fmt.Printf("Status: %d, Metric ID: %s, Value: %d\n", recValue.Code, response.ID, *response.Delta)
+
+	// Output:
+	// Status: 200, Metric ID: PollCount, Value: 5
 }

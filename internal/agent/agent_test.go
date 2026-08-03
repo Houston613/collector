@@ -26,13 +26,12 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 	a.MetricsCollect()
 
-	//все равно ставим блокировку, т.к больше похоже на настоящи кейс
-	//
+	// Lock is set to simulate a production-like concurrent access scenario
 	a.mu.RLock()
-	//здесь уже можно defer, потому-что тест может завершиться раньше цикла
+	// Using defer here as the test method may exit before the loop completes
 	defer a.mu.RUnlock()
 
 	for _, name := range expectedGauges {
@@ -40,7 +39,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 	}
 }
 
-// напиши такой же тест для gauge
+// TestMetricsCollect_IncrementsPollCount verifies that PollCount increments correctly.
 func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -54,7 +53,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -77,7 +76,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -90,13 +89,19 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 	}
 }
 
-func TestMetricsCollect_RandomValueInRange(t *testing.T) {
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
-	a.MetricsCollect()
+func TestMetricsCollectGopsutil(t *testing.T) {
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+	a.MetricsCollectGopsutil()
 
-	v := a.gaugesMetrics["RandomValue"]
-	assert.GreaterOrEqual(t, v, 0.0, "RandomValue should be >= 0")
-	assert.Less(t, v, 1.0, "RandomValue should be < 1")
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	assert.Contains(t, a.gaugesMetrics, "TotalMemory")
+	assert.Contains(t, a.gaugesMetrics, "FreeMemory")
+	assert.Contains(t, a.gaugesMetrics, "CPUutilization1")
+
+	assert.Greater(t, a.gaugesMetrics["TotalMemory"], 0.0)
+	assert.GreaterOrEqual(t, a.gaugesMetrics["FreeMemory"], 0.0)
 }
 
 func TestMetricsSendBatch_JSONFormat(t *testing.T) {
@@ -137,7 +142,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 				assert.Equal(t, http.MethodPost, r.Method)
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
-				// Проверяем, что клиент поддерживает gzip-ответы
+				// Check if request is gzip compressed
 				var reader io.Reader = r.Body
 				if r.Header.Get("Content-Encoding") == "gzip" {
 					gr, err := gzip.NewReader(r.Body)
@@ -157,14 +162,17 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			//NewNop - это заглушка для логгера, которая не будет ничего выводить. Это полезно в тестах, чтобы не засорять вывод.
-			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, zap.NewNop())
+			// Use zap.NewNop() to suppress logger outputs in tests and keep output clean
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
 			a.mu.Lock()
 			maps.Copy(a.gaugesMetrics, tt.gauges)
 			maps.Copy(a.countersMetrics, tt.counters)
 			a.mu.Unlock()
 
-			a.MetricsSend()
+			jobs := make(chan []models.Metrics, 1)
+			a.MetricsSend(jobs)
+			m := <-jobs
+			require.NoError(t, a.sendBatchJSON(m))
 
 			assert.Contains(t, received, tt.want)
 		})

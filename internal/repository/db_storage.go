@@ -19,10 +19,12 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// DBStorage implements MemRepository and Pinger using a PostgreSQL database pool.
 type DBStorage struct {
 	pool *pgxpool.Pool
 }
 
+// NewDBStorage creates and returns a new DBStorage instance connected to the specified PostgreSQL DSN.
 func NewDBStorage(ctx context.Context, dsn string) (*DBStorage, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -31,8 +33,9 @@ func NewDBStorage(ctx context.Context, dsn string) (*DBStorage, error) {
 	return &DBStorage{pool: pool}, nil
 }
 
+// Bootstrap runs any pending database migrations to initialize the schema.
 func (d *DBStorage) Bootstrap(migrationsPath string) error {
-	// Для миграций используем database/sql, так как golang-migrate лучше всего работает с ним
+	// database/sql is used for migrations since golang-migrate works best with it
 	db, err := sql.Open("pgx", d.pool.Config().ConnString())
 	if err != nil {
 		return fmt.Errorf("failed to open db for migrations: %w", err)
@@ -67,7 +70,7 @@ func (d *DBStorage) Bootstrap(migrationsPath string) error {
 func isRetriableDB(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		//можно сделать было вот так
+		// Alternative implementation: strings.HasPrefix(pgErr.Code, "08")
 		//return strings.HasPrefix(pgErr.Code, "08")
 		return pgerrcode.IsConnectionException(pgErr.Code)
 	}
@@ -78,6 +81,7 @@ func isRetriableDB(err error) bool {
 	return false
 }
 
+// UpdateGauge sets a new value for a gauge metric in the database.
 func (d *DBStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	return retry.Do(ctx, func() error {
 		_, err := d.pool.Exec(ctx, `
@@ -89,6 +93,7 @@ func (d *DBStorage) UpdateGauge(ctx context.Context, name string, value float64)
 	}, isRetriableDB)
 }
 
+// UpdateCounter increments a counter metric in the database by the specified value.
 func (d *DBStorage) UpdateCounter(ctx context.Context, name string, value int64) error {
 	return retry.Do(ctx, func() error {
 		_, err := d.pool.Exec(ctx, `
@@ -100,6 +105,7 @@ func (d *DBStorage) UpdateCounter(ctx context.Context, name string, value int64)
 	}, isRetriableDB)
 }
 
+// UpdateMetrics updates multiple gauge and counter metrics in a single database transaction batch.
 func (d *DBStorage) UpdateMetrics(ctx context.Context, metrics []models.Metrics) error {
 	return retry.Do(ctx, func() error {
 		batch := &pgx.Batch{}
@@ -139,6 +145,7 @@ func (d *DBStorage) UpdateMetrics(ctx context.Context, metrics []models.Metrics)
 	}, isRetriableDB)
 }
 
+// GetGauge retrieves the value of a gauge metric from the database by name.
 func (d *DBStorage) GetGauge(ctx context.Context, name string) (float64, bool, error) {
 	var val float64
 	var found bool
@@ -161,6 +168,7 @@ func (d *DBStorage) GetGauge(ctx context.Context, name string) (float64, bool, e
 	return val, found, nil
 }
 
+// GetCounter retrieves the value of a counter metric from the database by name.
 func (d *DBStorage) GetCounter(ctx context.Context, name string) (int64, bool, error) {
 	var delta int64
 	var found bool
@@ -183,6 +191,7 @@ func (d *DBStorage) GetCounter(ctx context.Context, name string) (int64, bool, e
 	return delta, found, nil
 }
 
+// GetAllGauges retrieves all gauge metrics stored in the database.
 func (d *DBStorage) GetAllGauges(ctx context.Context) (map[string]float64, error) {
 	var gauges map[string]float64
 	err := retry.Do(ctx, func() error {
@@ -210,6 +219,7 @@ func (d *DBStorage) GetAllGauges(ctx context.Context) (map[string]float64, error
 	return gauges, nil
 }
 
+// GetAllCounters retrieves all counter metrics stored in the database.
 func (d *DBStorage) GetAllCounters(ctx context.Context) (map[string]int64, error) {
 	var counters map[string]int64
 	err := retry.Do(ctx, func() error {
@@ -237,12 +247,14 @@ func (d *DBStorage) GetAllCounters(ctx context.Context) (map[string]int64, error
 	return counters, nil
 }
 
+// Ping checks if the database is reachable.
 func (d *DBStorage) Ping(ctx context.Context) error {
 	return retry.Do(ctx, func() error {
 		return d.pool.Ping(ctx)
 	}, isRetriableDB)
 }
 
+// Close closes the connection pool to the database.
 func (d *DBStorage) Close() {
 	d.pool.Close()
 }

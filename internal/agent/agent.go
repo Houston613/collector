@@ -17,16 +17,23 @@ import (
 	"time"
 
 	models "collector/internal/model"
+	"collector/pkg/signature"
 
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 )
 
 const (
-	DefaultServerAddress    = "localhost:8080"
-	DefaultPollInterval   = 2 * time.Second
+	// DefaultServerAddress is the default address of the metrics server.
+	DefaultServerAddress = "localhost:8080"
+	// DefaultPollInterval is the default frequency at which system metrics are gathered.
+	DefaultPollInterval = 2 * time.Second
+	// DefaultReportInterval is the default frequency at which gathered metrics are sent to the server.
 	DefaultReportInterval = 10 * time.Second
 )
 
+// Agent collects and periodically reports system runtime metrics to a server.
 type Agent struct {
 	mu              sync.RWMutex
 	gaugesMetrics   map[string]float64
@@ -34,23 +41,29 @@ type Agent struct {
 	addr            string
 	pollInterval    time.Duration
 	reportInterval  time.Duration
+	key             string
+	rateLimit       int
 	client          *http.Client
 	log             *zap.Logger
 }
 
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, log *zap.Logger) *Agent {
+// NewAgent creates and configures a new metrics Agent.
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
 		addr:            addr,
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
+		key:             key,
+		rateLimit:       rateLimit,
 		client:          &http.Client{},
-		//добавляем логгер в структуру агента, чтобы можно было логировать ошибки при отправке метрик
-		log:             log,
+		// Add logger to agent struct to log metric transmission errors
+		log: log,
 	}
 }
 
+// MetricsCollect gathers standard memory runtime statistics and stores them internally.
 func (a *Agent) MetricsCollect() {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -85,13 +98,39 @@ func (a *Agent) MetricsCollect() {
 	a.gaugesMetrics["StackSys"] = float64(ms.StackSys)
 	a.gaugesMetrics["Sys"] = float64(ms.Sys)
 	a.gaugesMetrics["TotalAlloc"] = float64(ms.TotalAlloc)
-	//cлучайное значение
+	// Random value
 	a.gaugesMetrics["RandomValue"] = rand.Float64()
 	a.countersMetrics["PollCount"]++
 }
 
-func (a *Agent) MetricsSend() {
-	// Копируем данные под RLock, чтобы не держать блокировку на время отправки
+// MetricsCollectGopsutil gathers additional system metrics like CPU utilization and memory using gopsutil.
+func (a *Agent) MetricsCollectGopsutil() {
+	v, err := mem.VirtualMemory()
+	if err != nil {
+		a.log.Error("error getting virtual memory stats", zap.Error(err))
+		return
+	}
+
+	c, err := cpu.Percent(0, true)
+	if err != nil {
+		a.log.Error("error getting cpu stats", zap.Error(err))
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.gaugesMetrics["TotalMemory"] = float64(v.Total)
+	a.gaugesMetrics["FreeMemory"] = float64(v.Free)
+
+	for i, p := range c {
+		a.gaugesMetrics[fmt.Sprintf("CPUutilization%d", i+1)] = p
+	}
+}
+
+// MetricsSend packages all gathered metrics and writes them to the jobs channel for shipping.
+func (a *Agent) MetricsSend(jobs chan<- []models.Metrics) {
+	// Copy metrics under RLock to prevent holding the lock during HTTP transmission
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
 	maps.Copy(gauges, a.gaugesMetrics)
@@ -115,8 +154,14 @@ func (a *Agent) MetricsSend() {
 		return
 	}
 
-	if err := a.sendBatchJSON(metrics); err != nil {
-		a.log.Error("error sending batch", zap.Error(err))
+	jobs <- metrics
+}
+
+func (a *Agent) worker(jobs <-chan []models.Metrics) {
+	for metrics := range jobs {
+		if err := a.sendBatchJSON(metrics); err != nil {
+			a.log.Error("error sending batch", zap.Error(err))
+		}
 	}
 }
 
@@ -125,8 +170,7 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	if err != nil {
 		return fmt.Errorf("marshal batch: %w", err)
 	}
-
-	// Сжимаем
+	// Compress the payload
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -150,6 +194,11 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		req.Header.Set("Content-Encoding", "gzip")
 		req.Header.Set("Accept-Encoding", "gzip")
 
+		if a.key != "" {
+			hash := signature.Sign(body, a.key)
+			req.Header.Set("HashSHA256", hash)
+		}
+
 		resp, err := a.client.Do(req)
 		if err != nil {
 			return err
@@ -167,18 +216,37 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	})
 }
 
+// Run starts the agent's main loops for collecting and sending metrics.
 func (a *Agent) Run() {
-	// Сбор метрик в отдельной горутине
-	//значит будет конкурентный доступ к данным, поэтому используем мьютекс для защиты данных
+	jobs := make(chan []models.Metrics, a.rateLimit)
+
+	// Workers for sending metrics
+	for i := 0; i < a.rateLimit; i++ {
+		go a.worker(jobs)
+	}
+
+	// Collect metrics
 	go func() {
-		for {
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
 			a.MetricsCollect()
-			time.Sleep(a.pollInterval)
 		}
 	}()
 
-	for {
-		time.Sleep(a.reportInterval)
-		a.MetricsSend()
+	// Collect gopsutil metrics
+	go func() {
+		ticker := time.NewTicker(a.pollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			a.MetricsCollectGopsutil()
+		}
+	}()
+
+	// Send metrics periodically
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.MetricsSend(jobs)
 	}
 }

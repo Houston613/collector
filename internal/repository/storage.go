@@ -7,27 +7,40 @@ import (
 	"sync"
 )
 
+// StructMem implements MemRepository using in-memory maps protected by a mutex.
 type StructMem struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
 
-//интерфейс для проверки доступности хранилища
+// Pinger defines an interface for checking the availability of a backing storage.
 type Pinger interface {
+	// Ping checks if the backing storage is reachable and functional.
 	Ping(ctx context.Context) error
 }
 
+// MemRepository defines the set of methods required to read and write metrics.
 type MemRepository interface {
+	// UpdateGauge updates the value of a gauge metric by its name.
 	UpdateGauge(ctx context.Context, name string, value float64) error
+	// UpdateCounter updates the value of a counter metric by its name (accumulating the value).
 	UpdateCounter(ctx context.Context, name string, value int64) error
+	// UpdateMetrics performs a batch update of multiple metrics.
 	UpdateMetrics(ctx context.Context, metrics []models.Metrics) error
+	// GetGauge retrieves the value of a gauge metric by its name.
+	// Returns the value, a boolean indicating if it was found, and any error encountered.
 	GetGauge(ctx context.Context, name string) (float64, bool, error)
+	// GetCounter retrieves the value of a counter metric by its name.
+	// Returns the value, a boolean indicating if it was found, and any error encountered.
 	GetCounter(ctx context.Context, name string) (int64, bool, error)
+	// GetAllGauges returns a map copy of all currently stored gauge metrics.
 	GetAllGauges(ctx context.Context) (map[string]float64, error)
+	// GetAllCounters returns a map copy of all currently stored counter metrics.
 	GetAllCounters(ctx context.Context) (map[string]int64, error)
 }
 
+// NewStructMem creates and initializes a new StructMem instance.
 func NewStructMem() *StructMem {
 	return &StructMem{
 		gauges:   make(map[string]float64),
@@ -35,6 +48,7 @@ func NewStructMem() *StructMem {
 	}
 }
 
+// UpdateGauge sets the new value for a gauge metric.
 func (m *StructMem) UpdateGauge(ctx context.Context, name string, value float64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -42,6 +56,7 @@ func (m *StructMem) UpdateGauge(ctx context.Context, name string, value float64)
 	return nil
 }
 
+// UpdateCounter adds the value to a counter metric.
 func (m *StructMem) UpdateCounter(ctx context.Context, name string, value int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -49,6 +64,7 @@ func (m *StructMem) UpdateCounter(ctx context.Context, name string, value int64)
 	return nil
 }
 
+// UpdateMetrics updates multiple gauge and counter metrics in a single batch operation.
 func (m *StructMem) UpdateMetrics(ctx context.Context, metrics []models.Metrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -68,6 +84,7 @@ func (m *StructMem) UpdateMetrics(ctx context.Context, metrics []models.Metrics)
 	return nil
 }
 
+// GetGauge retrieves the current value of a gauge metric by name.
 func (m *StructMem) GetGauge(ctx context.Context, name string) (float64, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -75,6 +92,7 @@ func (m *StructMem) GetGauge(ctx context.Context, name string) (float64, bool, e
 	return v, ok, nil
 }
 
+// GetCounter retrieves the current value of a counter metric by name.
 func (m *StructMem) GetCounter(ctx context.Context, name string) (int64, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -82,6 +100,7 @@ func (m *StructMem) GetCounter(ctx context.Context, name string) (int64, bool, e
 	return v, ok, nil
 }
 
+// GetAllGauges returns a thread-safe copy of all gauge metrics.
 func (m *StructMem) GetAllGauges(ctx context.Context) (map[string]float64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -90,6 +109,7 @@ func (m *StructMem) GetAllGauges(ctx context.Context) (map[string]float64, error
 	return mapCopy, nil
 }
 
+// GetAllCounters returns a thread-safe copy of all counter metrics.
 func (m *StructMem) GetAllCounters(ctx context.Context) (map[string]int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
