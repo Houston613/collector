@@ -6,7 +6,9 @@ import (
 	"collector/internal/middleware"
 	"collector/internal/repository"
 	"collector/internal/version"
+	"collector/pkg/crypto"
 	"context"
+	"crypto/rsa"
 	"flag"
 	"fmt"
 	"os"
@@ -34,6 +36,7 @@ func run() error {
 	key := flag.String("k", "", "key for data signing")
 	auditFilePath := flag.String("audit-file", "", "path to audit file (empty to disable file audit)")
 	auditURL := flag.String("audit-url", "", "audit server URL (empty to disable HTTP audit)")
+	cryptoKeyPath := flag.String("crypto-key", "", "path to file with RSA private key")
 	flag.Parse()
 
 	if flag.NArg() > 0 {
@@ -68,6 +71,9 @@ func run() error {
 	}
 	if v := os.Getenv("AUDIT_URL"); v != "" {
 		*auditURL = v
+	}
+	if v := os.Getenv("CRYPTO_KEY"); v != "" {
+		*cryptoKeyPath = v
 	}
 
 	// Initialize the logger
@@ -157,10 +163,23 @@ func run() error {
 		}()
 	}
 
+	var privKey *rsa.PrivateKey
+	if *cryptoKeyPath != "" {
+		pk, err := crypto.LoadPrivateKey(*cryptoKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load private key from %s: %w", *cryptoKeyPath, err)
+		}
+		privKey = pk
+		log.Info("asymmetric decryption enabled", zap.String("key_path", *cryptoKeyPath))
+	}
+
 	e := echo.New()
 	// Logger is implemented via middleware
 	e.Use(middleware.RequestLogger(log))
-	// Order of middleware: compress first, then sign
+	// Order of middleware: decrypt first, then decompress, then sign
+	if privKey != nil {
+		e.Use(middleware.CryptoMiddleware(privKey, log))
+	}
 	e.Use(middleware.GzipMiddleware(log))
 	e.Use(middleware.SignatureMiddleware(*key, log))
 
