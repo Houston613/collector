@@ -60,7 +60,6 @@ func generateResetForDir(dirPath string) error {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax,
 		Dir:  dirPath,
-		Env:  append(os.Environ(), "GO111MODULE=off"),
 	}
 	pkgs, err := packages.Load(cfg, ".")
 	if err != nil {
@@ -246,53 +245,73 @@ func getPrimitiveKind(expr ast.Expr) string {
 	return ""
 }
 
+func genStarExprReset(buf *bytes.Buffer, target string, t *ast.StarExpr) {
+	kind := getPrimitiveKind(t.X)
+	switch kind {
+	case "string":
+		fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = \"\"\n\t}\n", target, target)
+	case "bool":
+		fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = false\n\t}\n", target, target)
+	case "numeric":
+		fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = 0\n\t}\n", target, target)
+	default:
+		if arr, ok := t.X.(*ast.ArrayType); ok && arr.Len == nil {
+			fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = (*%s)[:0]\n\t}\n", target, target, target)
+		} else if _, ok := t.X.(*ast.MapType); ok {
+			fmt.Fprintf(buf, "\tif %s != nil {\n\t\tclear(*%s)\n\t}\n", target, target)
+		} else {
+			fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
+		}
+	}
+}
+
+func genArrayTypeReset(buf *bytes.Buffer, target string, t *ast.ArrayType) {
+	if t.Len == nil {
+		fmt.Fprintf(buf, "\t%s = %s[:0]\n", target, target)
+	} else {
+		fmt.Fprintf(buf, "\tclear(%s)\n", target)
+	}
+}
+
+func genMapTypeReset(buf *bytes.Buffer, target string, t *ast.MapType) {
+	fmt.Fprintf(buf, "\tclear(%s)\n", target)
+}
+
+func genInterfaceTypeReset(buf *bytes.Buffer, target string, t *ast.InterfaceType) {
+	fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
+}
+
+func genDefaultTypeReset(buf *bytes.Buffer, target string, expr ast.Expr) {
+	kind := getPrimitiveKind(expr)
+	switch kind {
+	case "string":
+		fmt.Fprintf(buf, "\t%s = \"\"\n", target)
+	case "bool":
+		fmt.Fprintf(buf, "\t%s = false\n", target)
+	case "numeric":
+		fmt.Fprintf(buf, "\t%s = 0\n", target)
+	default:
+		if ident, ok := expr.(*ast.Ident); ok && ident.Name == "any" {
+			fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
+		} else {
+			fmt.Fprintf(buf, "\tif resetter, ok := any(&%s).(interface{ Reset() }); ok {\n\t\tresetter.Reset()\n\t}\n", target)
+		}
+	}
+}
+
 func genFieldReset(buf *bytes.Buffer, rec, fname string, expr ast.Expr) {
 	target := fmt.Sprintf("%s.%s", rec, fname)
 
 	switch t := expr.(type) {
 	case *ast.StarExpr:
-		kind := getPrimitiveKind(t.X)
-		switch kind {
-		case "string":
-			fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = \"\"\n\t}\n", target, target)
-		case "bool":
-			fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = false\n\t}\n", target, target)
-		case "numeric":
-			fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = 0\n\t}\n", target, target)
-		default:
-			if arr, ok := t.X.(*ast.ArrayType); ok && arr.Len == nil {
-				fmt.Fprintf(buf, "\tif %s != nil {\n\t\t*%s = (*%s)[:0]\n\t}\n", target, target, target)
-			} else if _, ok := t.X.(*ast.MapType); ok {
-				fmt.Fprintf(buf, "\tif %s != nil {\n\t\tclear(*%s)\n\t}\n", target, target)
-			} else {
-				fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
-			}
-		}
+		genStarExprReset(buf, target, t)
 	case *ast.ArrayType:
-		if t.Len == nil {
-			fmt.Fprintf(buf, "\t%s = %s[:0]\n", target, target)
-		} else {
-			fmt.Fprintf(buf, "\tclear(%s)\n", target)
-		}
+		genArrayTypeReset(buf, target, t)
 	case *ast.MapType:
-		fmt.Fprintf(buf, "\tclear(%s)\n", target)
+		genMapTypeReset(buf, target, t)
 	case *ast.InterfaceType:
-		fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
+		genInterfaceTypeReset(buf, target, t)
 	default:
-		kind := getPrimitiveKind(expr)
-		switch kind {
-		case "string":
-			fmt.Fprintf(buf, "\t%s = \"\"\n", target)
-		case "bool":
-			fmt.Fprintf(buf, "\t%s = false\n", target)
-		case "numeric":
-			fmt.Fprintf(buf, "\t%s = 0\n", target)
-		default:
-			if ident, ok := expr.(*ast.Ident); ok && ident.Name == "any" {
-				fmt.Fprintf(buf, "\tif resetter, ok := any(%s).(interface{ Reset() }); ok && %s != nil {\n\t\tresetter.Reset()\n\t}\n", target, target)
-			} else {
-				fmt.Fprintf(buf, "\tif resetter, ok := any(&%s).(interface{ Reset() }); ok {\n\t\tresetter.Reset()\n\t}\n", target)
-			}
-		}
+		genDefaultTypeReset(buf, target, expr)
 	}
 }

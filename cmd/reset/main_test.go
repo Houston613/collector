@@ -10,6 +10,11 @@ import (
 func TestResetGenerator(t *testing.T) {
 	tempDir := t.TempDir()
 
+	goMod := "module testpkg\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
 	code := `package testpkg
 
 // generate:reset
@@ -78,6 +83,11 @@ type ChildStruct struct {
 
 func TestResetGeneratorCleanup(t *testing.T) {
 	tempDir := t.TempDir()
+
+	goMod := "module testpkg\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
 
 	genPath := filepath.Join(tempDir, "reset.gen.go")
 	if err := os.WriteFile(genPath, []byte("// old code"), 0644); err != nil {
