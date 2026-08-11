@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"collector/pkg/crypto"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -11,7 +12,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	models "collector/internal/model"
 
@@ -225,4 +228,70 @@ func TestAgentAsymmetricEncryption(t *testing.T) {
 	require.Len(t, received, 1)
 	assert.Equal(t, "EncryptedMetric", received[0].ID)
 	assert.Equal(t, 42.0, *received[0].Value)
+}
+
+func TestAgentGracefulShutdown(t *testing.T) {
+	var received []models.Metrics
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		gr, err := gzip.NewReader(bytes.NewReader(body))
+		require.NoError(t, err)
+		defer gr.Close()
+
+		decompressed, err := io.ReadAll(gr)
+		require.NoError(t, err)
+
+		var m []models.Metrics
+		require.NoError(t, json.Unmarshal(decompressed, &m))
+		
+		mu.Lock()
+		received = append(received, m...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// High poll and report intervals to ensure standard tickers don't trigger
+	a := NewAgent(srv.URL, 10*time.Hour, 10*time.Hour, "", nil, 1, zap.NewNop())
+	
+	a.mu.Lock()
+	val := 123.45
+	a.gaugesMetrics["FinalMetric"] = val
+	a.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	runDone := make(chan struct{})
+	go func() {
+		a.Run(ctx)
+		close(runDone)
+	}()
+
+	// Give it a tiny bit of time to start up, then cancel
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	// Wait for Run to finish
+	select {
+	case <-runDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent failed to shutdown gracefully in time")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, received)
+	
+	found := false
+	for _, m := range received {
+		if m.ID == "FinalMetric" {
+			found = true
+			assert.Equal(t, 123.45, *m.Value)
+		}
+	}
+	assert.True(t, found, "expected final metric to be sent during shutdown")
 }

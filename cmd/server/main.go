@@ -11,7 +11,10 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -142,9 +145,47 @@ func run() error {
 	// TODO: Pass configuration object instead of connection DSN string directly
 	metricsHandler := handler.NewMetricsHandler(storage, cfgVal.DbDSN, auditor, log)
 	metricsHandler.RegisterRoutes(e)
-	if err := e.Start(cfgVal.Addr); err != nil {
-		log.Error("server stopped with error", zap.Error(err))
-		return err
+
+	// Listen for SIGINT, SIGTERM, SIGQUIT signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// Start Echo HTTP server in a background goroutine
+	go func() {
+		if err := e.Start(cfgVal.Addr); err != nil && err != http.ErrServerClosed {
+			log.Error("server stopped with error", zap.Error(err))
+		}
+	}()
+
+	// Block until a signal is received
+	sig := <-sigChan
+	log.Info("received shutdown signal", zap.String("signal", sig.String()))
+
+	// Create a context for graceful shutdown of the HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	// Stop Echo HTTP server
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		log.Error("failed to gracefully shutdown HTTP server", zap.Error(err))
+	} else {
+		log.Info("HTTP server stopped gracefully")
 	}
+
+	// Save file-backed storage if active
+	if fileStorage, ok := storage.(*repository.FileBackedStorage); ok {
+		if err := fileStorage.Save(); err != nil {
+			log.Error("failed to save metrics to file on shutdown", zap.Error(err))
+		} else {
+			log.Info("metrics saved to file on shutdown")
+		}
+	}
+
+	// Close database storage if active
+	if dbStorage, ok := storage.(*repository.DBStorage); ok {
+		dbStorage.Close()
+		log.Info("database storage closed")
+	}
+
 	return nil
 }

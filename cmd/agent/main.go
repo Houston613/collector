@@ -5,9 +5,12 @@ import (
 	"collector/internal/config"
 	"collector/internal/version"
 	"collector/pkg/crypto"
+	"context"
 	"crypto/rsa"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -61,6 +64,20 @@ func run() error {
 		cfgVal.RateLimit,
 		log,
 	)
-	a.Run()
+
+	// Listen for SIGINT, SIGTERM, SIGQUIT signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		sig := <-sigChan
+		log.Info("received shutdown signal", zap.String("signal", sig.String()))
+		cancel()
+	}()
+
+	a.Run(ctx)
 	return nil
 }
