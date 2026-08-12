@@ -3,6 +3,8 @@ package main
 import (
 	"collector/internal/agent"
 	"collector/internal/version"
+	"collector/pkg/crypto"
+	"crypto/rsa"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +29,7 @@ func run() error {
 	pollInterval := flag.Int("p", 2, "frequency of metric polling (seconds)")
 	key := flag.String("k", "", "key for data signing")
 	rateLimit := flag.Int("l", 3, "rate limit for outgoing concurrent requests")
+	cryptoKeyPath := flag.String("crypto-key", "", "path to file with RSA public key")
 	flag.Parse()
 
 	// Check for unexpected positional arguments
@@ -56,6 +59,9 @@ func run() error {
 			*rateLimit = v
 		}
 	}
+	if envCryptoKey := os.Getenv("CRYPTO_KEY"); envCryptoKey != "" {
+		*cryptoKeyPath = envCryptoKey
+	}
 
 	// Initialize the logger
 	cfg := zap.NewProductionEncoderConfig()
@@ -71,12 +77,23 @@ func run() error {
 	))
 	defer log.Sync()
 
+	var pubKey *rsa.PublicKey
+	if *cryptoKeyPath != "" {
+		pk, err := crypto.LoadPublicKey(*cryptoKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load public key from %s: %w", *cryptoKeyPath, err)
+		}
+		pubKey = pk
+		log.Info("asymmetric encryption enabled", zap.String("key_path", *cryptoKeyPath))
+	}
+
 	a := agent.NewAgent(
 		// Prepend the http:// protocol scheme to the address
 		"http://"+*addr,
 		time.Duration(*pollInterval)*time.Second,
 		time.Duration(*reportInterval)*time.Second,
 		*key,
+		pubKey,
 		*rateLimit,
 		log,
 	)

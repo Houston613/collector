@@ -1,7 +1,11 @@
 package agent
 
 import (
+	"bytes"
+	"collector/pkg/crypto"
 	"compress/gzip"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"io"
 	"maps"
@@ -26,7 +30,7 @@ func TestMetricsCollect_PopulatesGauges(t *testing.T) {
 		"Sys", "TotalAlloc", "RandomValue",
 	}
 
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", nil, 1, zap.NewNop())
 	a.MetricsCollect()
 
 	// Lock is set to simulate a production-like concurrent access scenario
@@ -53,7 +57,7 @@ func TestMetricsCollect_IncrementsPollCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", nil, 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -76,7 +80,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+			a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", nil, 1, zap.NewNop())
 			for i := 0; i < tt.calls; i++ {
 				a.MetricsCollect()
 			}
@@ -90,7 +94,7 @@ func TestMetricsCollect_UpdatesGaugeValues(t *testing.T) {
 }
 
 func TestMetricsCollectGopsutil(t *testing.T) {
-	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+	a := NewAgent(DefaultServerAddress, DefaultPollInterval, DefaultReportInterval, "", nil, 1, zap.NewNop())
 	a.MetricsCollectGopsutil()
 
 	a.mu.RLock()
@@ -163,7 +167,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			defer srv.Close()
 
 			// Use zap.NewNop() to suppress logger outputs in tests and keep output clean
-			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", 1, zap.NewNop())
+			a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", nil, 1, zap.NewNop())
 			a.mu.Lock()
 			maps.Copy(a.gaugesMetrics, tt.gauges)
 			maps.Copy(a.countersMetrics, tt.counters)
@@ -177,4 +181,48 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			assert.Contains(t, received, tt.want)
 		})
 	}
+}
+
+func TestAgentAsymmetricEncryption(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	publicKey := &privateKey.PublicKey
+
+	var received []models.Metrics
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		decrypted, err := crypto.Decrypt(privateKey, body)
+		require.NoError(t, err)
+
+		gr, err := gzip.NewReader(bytes.NewReader(decrypted))
+		require.NoError(t, err)
+		defer gr.Close()
+
+		decompressed, err := io.ReadAll(gr)
+		require.NoError(t, err)
+
+		var m []models.Metrics
+		require.NoError(t, json.Unmarshal(decompressed, &m))
+		received = m
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := NewAgent(srv.URL, DefaultPollInterval, DefaultReportInterval, "", publicKey, 1, zap.NewNop())
+	a.mu.Lock()
+	val := 42.0
+	a.gaugesMetrics["EncryptedMetric"] = val
+	a.mu.Unlock()
+
+	jobs := make(chan []models.Metrics, 1)
+	a.MetricsSend(jobs)
+	m := <-jobs
+	require.NoError(t, a.sendBatchJSON(m))
+
+	require.Len(t, received, 1)
+	assert.Equal(t, "EncryptedMetric", received[0].ID)
+	assert.Equal(t, 42.0, *received[0].Value)
 }

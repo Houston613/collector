@@ -2,9 +2,11 @@ package agent
 
 import (
 	"bytes"
+	"collector/pkg/crypto"
 	"collector/pkg/retry"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,13 +44,14 @@ type Agent struct {
 	pollInterval    time.Duration
 	reportInterval  time.Duration
 	key             string
+	cryptoKey       *rsa.PublicKey
 	rateLimit       int
 	client          *http.Client
 	log             *zap.Logger
 }
 
 // NewAgent creates and configures a new metrics Agent.
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, cryptoKey *rsa.PublicKey, rateLimit int, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
@@ -56,6 +59,7 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
 		key:             key,
+		cryptoKey:       cryptoKey,
 		rateLimit:       rateLimit,
 		client:          &http.Client{},
 		// Add logger to agent struct to log metric transmission errors
@@ -184,9 +188,18 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	}
 
 	compressedData := buf.Bytes()
+	payload := compressedData
+
+	if a.cryptoKey != nil {
+		enc, err := crypto.Encrypt(a.cryptoKey, compressedData)
+		if err != nil {
+			return fmt.Errorf("encrypt payload: %w", err)
+		}
+		payload = enc
+	}
 
 	return retry.Do(context.Background(), func() error {
-		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(compressedData))
+		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(payload))
 		if err != nil {
 			return fmt.Errorf("create request: %w", err)
 		}
