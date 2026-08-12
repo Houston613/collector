@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"collector/pkg/pool"
 	"collector/pkg/signature"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,17 +10,14 @@ import (
 	"hash"
 	"io"
 	"net/http"
-	"sync"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
-var bufferPool = sync.Pool{
-	New: func() any {
-		return new(bytes.Buffer)
-	},
-}
+var bufferPool = pool.New(func() *bytes.Buffer {
+	return new(bytes.Buffer)
+})
 
 type signatureWriter struct {
 	http.ResponseWriter
@@ -31,8 +29,7 @@ type signatureWriter struct {
 }
 
 func newSignatureWriter(w http.ResponseWriter, key string) *signatureWriter {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
+	buf := bufferPool.Get()
 	mac := hmac.New(sha256.New, []byte(key))
 	return &signatureWriter{
 		ResponseWriter: w,

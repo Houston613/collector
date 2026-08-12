@@ -7,6 +7,7 @@ const (
 	Gauge = "gauge"
 )
 
+// generate:reset
 // Metrics represents a data structure for sending and receiving metric payloads.
 // Delta and Value are pointers to distinguish between zero values and unset values.
 type Metrics struct {
