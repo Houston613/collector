@@ -2,9 +2,11 @@ package agent
 
 import (
 	"bytes"
+	"collector/pkg/crypto"
 	"collector/pkg/retry"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,13 +44,14 @@ type Agent struct {
 	pollInterval    time.Duration
 	reportInterval  time.Duration
 	key             string
+	cryptoKey       *rsa.PublicKey
 	rateLimit       int
 	client          *http.Client
 	log             *zap.Logger
 }
 
 // NewAgent creates and configures a new metrics Agent.
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, cryptoKey *rsa.PublicKey, rateLimit int, log *zap.Logger) *Agent {
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
@@ -56,6 +59,7 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
 		key:             key,
+		cryptoKey:       cryptoKey,
 		rateLimit:       rateLimit,
 		client:          &http.Client{},
 		// Add logger to agent struct to log metric transmission errors
@@ -184,9 +188,18 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 	}
 
 	compressedData := buf.Bytes()
+	payload := compressedData
+
+	if a.cryptoKey != nil {
+		enc, err := crypto.Encrypt(a.cryptoKey, compressedData)
+		if err != nil {
+			return fmt.Errorf("encrypt payload: %w", err)
+		}
+		payload = enc
+	}
 
 	return retry.Do(context.Background(), func() error {
-		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(compressedData))
+		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(payload))
 		if err != nil {
 			return fmt.Errorf("create request: %w", err)
 		}
@@ -217,36 +230,51 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 }
 
 // Run starts the agent's main loops for collecting and sending metrics.
-func (a *Agent) Run() {
+// It runs until the context is cancelled, after which it performs a final report
+// and waits for all outgoing workers to complete.
+func (a *Agent) Run(ctx context.Context) {
 	jobs := make(chan []models.Metrics, a.rateLimit)
+	var wg sync.WaitGroup
 
 	// Workers for sending metrics
 	for i := 0; i < a.rateLimit; i++ {
-		go a.worker(jobs)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.worker(jobs)
+		}()
 	}
 
-	// Collect metrics
-	go func() {
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			a.MetricsCollect()
+	pollTicker := time.NewTicker(a.pollInterval)
+	defer pollTicker.Stop()
+
+	reportTicker := time.NewTicker(a.reportInterval)
+	defer reportTicker.Stop()
+
+	// Run collection and reporting loop
+	func() {
+		for {
+			select {
+			case <-ctx.Done():
+				a.log.Info("agent received cancellation, stopping...")
+				return
+			case <-pollTicker.C:
+				a.MetricsCollect()
+				a.MetricsCollectGopsutil()
+			case <-reportTicker.C:
+				a.MetricsSend(jobs)
+			}
 		}
 	}()
 
-	// Collect gopsutil metrics
-	go func() {
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			a.MetricsCollectGopsutil()
-		}
-	}()
+	// Trigger one final metrics send of whatever is currently collected
+	a.log.Info("sending final batch of metrics before shutdown...")
+	a.MetricsSend(jobs)
 
-	// Send metrics periodically
-	ticker := time.NewTicker(a.reportInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		a.MetricsSend(jobs)
-	}
+	// Close jobs channel to signal workers to drain and exit
+	close(jobs)
+
+	// Wait for all workers to finish sending remaining metrics
+	wg.Wait()
+	a.log.Info("all agent workers finished, shutdown complete")
 }

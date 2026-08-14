@@ -2,15 +2,20 @@ package main
 
 import (
 	"collector/internal/audit"
+	"collector/internal/config"
 	"collector/internal/handler"
 	"collector/internal/middleware"
 	"collector/internal/repository"
 	"collector/internal/version"
+	"collector/pkg/crypto"
 	"context"
-	"flag"
+	"crypto/rsa"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"strconv"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -26,48 +31,9 @@ func main() {
 }
 
 func run() error {
-	addr := flag.String("a", "localhost:8080", "HTTP server address")
-	storeInterval := flag.Int("i", 300, "metrics save interval (seconds, 0 for sync)")
-	fileStoragePath := flag.String("f", "/tmp/metrics-storage.json", "path to metrics storage file")
-	restore := flag.Bool("r", true, "restore previously saved metrics on startup")
-	dbDSN := flag.String("d", "", "database connection DSN string")
-	key := flag.String("k", "", "key for data signing")
-	auditFilePath := flag.String("audit-file", "", "path to audit file (empty to disable file audit)")
-	auditURL := flag.String("audit-url", "", "audit server URL (empty to disable HTTP audit)")
-	flag.Parse()
-
-	if flag.NArg() > 0 {
-		return fmt.Errorf("unknown arguments: %v", flag.Args())
-	}
-
-	// Environment variables take precedence over command-line flags
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		*addr = envAddr
-	}
-	if v := os.Getenv("STORE_INTERVAL"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			*storeInterval = n
-		}
-	}
-	if v := os.Getenv("FILE_STORAGE_PATH"); v != "" {
-		*fileStoragePath = v
-	}
-	if v := os.Getenv("RESTORE"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			*restore = b
-		}
-	}
-	if v := os.Getenv("DATABASE_DSN"); v != "" {
-		*dbDSN = v
-	}
-	if v := os.Getenv("KEY"); v != "" {
-		*key = v
-	}
-	if v := os.Getenv("AUDIT_FILE"); v != "" {
-		*auditFilePath = v
-	}
-	if v := os.Getenv("AUDIT_URL"); v != "" {
-		*auditURL = v
+	cfgVal, err := config.ParseServerConfig(os.Args[1:])
+	if err != nil {
+		return err
 	}
 
 	// Initialize the logger
@@ -88,8 +54,8 @@ func run() error {
 	var storage repository.MemRepository
 	ctx := context.Background()
 
-	if *dbDSN != "" {
-		dbStorage, err := repository.NewDBStorage(ctx, *dbDSN)
+	if cfgVal.DbDSN != "" {
+		dbStorage, err := repository.NewDBStorage(ctx, cfgVal.DbDSN)
 		if err != nil {
 			return fmt.Errorf("failed to initialize database: %w", err)
 		}
@@ -98,34 +64,34 @@ func run() error {
 		}
 		storage = dbStorage
 		log.Info("using database storage backend")
-	} else if *fileStoragePath != "" {
-		fileStorage := repository.NewFileBackedStorage(*fileStoragePath, *storeInterval == 0, log)
+	} else if cfgVal.FileStoragePath != "" {
+		fileStorage := repository.NewFileBackedStorage(cfgVal.FileStoragePath, cfgVal.StoreInterval == 0, log)
 
-		if *restore {
+		if cfgVal.Restore {
 			if err := fileStorage.Load(); err != nil {
-				log.Warn("failed to load metrics from file", zap.String("path", *fileStoragePath), zap.Error(err))
+				log.Warn("failed to load metrics from file", zap.String("path", cfgVal.FileStoragePath), zap.Error(err))
 			} else {
-				log.Info("metrics loaded from file", zap.String("path", *fileStoragePath))
+				log.Info("metrics loaded from file", zap.String("path", cfgVal.FileStoragePath))
 			}
 		}
 
 		// Periodic disk synchronization loop
-		if *storeInterval > 0 {
+		if cfgVal.StoreInterval > 0 {
 			go func() {
-				ticker := time.NewTicker(time.Duration(*storeInterval) * time.Second)
+				ticker := time.NewTicker(time.Duration(cfgVal.StoreInterval) * time.Second)
 				defer ticker.Stop()
 				for range ticker.C {
 					if err := fileStorage.Save(); err != nil {
-						log.Error("failed to save metrics to file", zap.String("path", *fileStoragePath), zap.Error(err))
+						log.Error("failed to save metrics to file", zap.String("path", cfgVal.FileStoragePath), zap.Error(err))
 					} else {
-						log.Info("metrics saved to file", zap.String("path", *fileStoragePath))
+						log.Info("metrics saved to file", zap.String("path", cfgVal.FileStoragePath))
 					}
 				}
 			}()
 		}
 
 		storage = fileStorage
-		log.Info("using file-backed storage", zap.String("path", *fileStoragePath))
+		log.Info("using file-backed storage", zap.String("path", cfgVal.FileStoragePath))
 	} else {
 		storage = repository.NewStructMem()
 		log.Info("using in-memory storage backend")
@@ -133,18 +99,18 @@ func run() error {
 
 	// Setup auditor: register observers based on configured parameters
 	var observers []audit.Observer
-	if *auditFilePath != "" {
-		fo, err := audit.NewFileObserver(*auditFilePath)
+	if cfgVal.AuditFilePath != "" {
+		fo, err := audit.NewFileObserver(cfgVal.AuditFilePath)
 		if err != nil {
 			return fmt.Errorf("failed to open audit file: %w", err)
 		}
 		observers = append(observers, fo)
-		log.Info("file auditing enabled", zap.String("path", *auditFilePath))
+		log.Info("file auditing enabled", zap.String("path", cfgVal.AuditFilePath))
 	}
-	if *auditURL != "" {
-		ho := audit.NewHTTPObserver(*auditURL)
+	if cfgVal.AuditURL != "" {
+		ho := audit.NewHTTPObserver(cfgVal.AuditURL)
 		observers = append(observers, ho)
-		log.Info("HTTP auditing enabled", zap.String("url", *auditURL))
+		log.Info("HTTP auditing enabled", zap.String("url", cfgVal.AuditURL))
 	}
 
 	var auditor *audit.Notifier
@@ -157,19 +123,73 @@ func run() error {
 		}()
 	}
 
+	var privKey *rsa.PrivateKey
+	if cfgVal.CryptoKeyPath != "" {
+		pk, err := crypto.LoadPrivateKey(cfgVal.CryptoKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load private key from %s: %w", cfgVal.CryptoKeyPath, err)
+		}
+		privKey = pk
+		log.Info("asymmetric decryption enabled", zap.String("key_path", cfgVal.CryptoKeyPath))
+	}
+
 	e := echo.New()
 	// Logger is implemented via middleware
 	e.Use(middleware.RequestLogger(log))
-	// Order of middleware: compress first, then sign
+	// Order of middleware: decrypt first, then decompress, then sign
+	if privKey != nil {
+		e.Use(middleware.CryptoMiddleware(privKey, log))
+	}
 	e.Use(middleware.GzipMiddleware(log))
-	e.Use(middleware.SignatureMiddleware(*key, log))
+	e.Use(middleware.SignatureMiddleware(cfgVal.Key, log))
 
 	// TODO: Pass configuration object instead of connection DSN string directly
-	metricsHandler := handler.NewMetricsHandler(storage, *dbDSN, auditor, log)
+	metricsHandler := handler.NewMetricsHandler(storage, cfgVal.DbDSN, auditor, log)
 	metricsHandler.RegisterRoutes(e)
-	if err := e.Start(*addr); err != nil {
-		log.Error("server stopped with error", zap.Error(err))
-		return err
+
+	// Listen for SIGINT, SIGTERM, SIGQUIT signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	// Start Echo HTTP server in a background goroutine
+	go func() {
+		if err := e.Start(cfgVal.Addr); err != nil && err != http.ErrServerClosed {
+			log.Error("server stopped with error", zap.Error(err))
+		}
+	}()
+
+	// Block until a signal is received
+	sig := <-sigChan
+	log.Info("received shutdown signal", zap.String("signal", sig.String()))
+
+	// Create a context for graceful shutdown of the HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	// Stop Echo HTTP server
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		log.Error("failed to gracefully shutdown HTTP server", zap.Error(err))
+	} else {
+		log.Info("HTTP server stopped gracefully")
 	}
+
+	// Save storage state if supported on shutdown
+	if saver, ok := storage.(repository.Saver); ok {
+		if err := saver.Save(); err != nil {
+			log.Error("failed to save metrics on shutdown", zap.Error(err))
+		} else {
+			log.Info("metrics saved on shutdown")
+		}
+	}
+
+	// Close storage resources if supported on shutdown
+	if closer, ok := storage.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			log.Error("failed to close storage on shutdown", zap.Error(err))
+		} else {
+			log.Info("storage closed gracefully")
+		}
+	}
+
 	return nil
 }

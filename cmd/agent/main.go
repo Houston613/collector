@@ -2,11 +2,15 @@ package main
 
 import (
 	"collector/internal/agent"
+	"collector/internal/config"
 	"collector/internal/version"
-	"flag"
+	"collector/pkg/crypto"
+	"context"
+	"crypto/rsa"
 	"fmt"
 	"os"
-	"strconv"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,40 +25,9 @@ func main() {
 }
 
 func run() error {
-	// Parse command-line flags
-	addr := flag.String("a", "localhost:8080", "HTTP server address")
-	reportInterval := flag.Int("r", 10, "frequency of metric reports (seconds)")
-	pollInterval := flag.Int("p", 2, "frequency of metric polling (seconds)")
-	key := flag.String("k", "", "key for data signing")
-	rateLimit := flag.Int("l", 3, "rate limit for outgoing concurrent requests")
-	flag.Parse()
-
-	// Check for unexpected positional arguments
-	if flag.NArg() > 0 {
-		return fmt.Errorf("unknown arguments: %v", flag.Args())
-	}
-
-	// Environment variables take precedence over command-line flags
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		*addr = envAddr
-	}
-	if envReport := os.Getenv("REPORT_INTERVAL"); envReport != "" {
-		if v, err := strconv.Atoi(envReport); err == nil {
-			*reportInterval = v
-		}
-	}
-	if envPoll := os.Getenv("POLL_INTERVAL"); envPoll != "" {
-		if v, err := strconv.Atoi(envPoll); err == nil {
-			*pollInterval = v
-		}
-	}
-	if envKey := os.Getenv("KEY"); envKey != "" {
-		*key = envKey
-	}
-	if envRateLimit := os.Getenv("RATE_LIMIT"); envRateLimit != "" {
-		if v, err := strconv.Atoi(envRateLimit); err == nil {
-			*rateLimit = v
-		}
+	cfgVal, err := config.ParseAgentConfig(os.Args[1:])
+	if err != nil {
+		return err
 	}
 
 	// Initialize the logger
@@ -71,15 +44,40 @@ func run() error {
 	))
 	defer log.Sync()
 
+	var pubKey *rsa.PublicKey
+	if cfgVal.CryptoKeyPath != "" {
+		pk, err := crypto.LoadPublicKey(cfgVal.CryptoKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load public key from %s: %w", cfgVal.CryptoKeyPath, err)
+		}
+		pubKey = pk
+		log.Info("asymmetric encryption enabled", zap.String("key_path", cfgVal.CryptoKeyPath))
+	}
+
 	a := agent.NewAgent(
 		// Prepend the http:// protocol scheme to the address
-		"http://"+*addr,
-		time.Duration(*pollInterval)*time.Second,
-		time.Duration(*reportInterval)*time.Second,
-		*key,
-		*rateLimit,
+		"http://"+cfgVal.Addr,
+		time.Duration(cfgVal.PollInterval)*time.Second,
+		time.Duration(cfgVal.ReportInterval)*time.Second,
+		cfgVal.Key,
+		pubKey,
+		cfgVal.RateLimit,
 		log,
 	)
-	a.Run()
+
+	// Listen for SIGINT, SIGTERM, SIGQUIT signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		sig := <-sigChan
+		log.Info("received shutdown signal", zap.String("signal", sig.String()))
+		cancel()
+	}()
+
+	a.Run(ctx)
 	return nil
 }
