@@ -88,14 +88,10 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 			addrVal = *fileCfg.Address
 		}
 		if fileCfg.ReportInterval != nil && !isFlagPassedLocal("r") {
-			if val, err := parseDurationOrInt(string(*fileCfg.ReportInterval)); err == nil {
-				reportIntervalVal = val
-			}
+			reportIntervalVal = int(*fileCfg.ReportInterval)
 		}
 		if fileCfg.PollInterval != nil && !isFlagPassedLocal("p") {
-			if val, err := parseDurationOrInt(string(*fileCfg.PollInterval)); err == nil {
-				pollIntervalVal = val
-			}
+			pollIntervalVal = int(*fileCfg.PollInterval)
 		}
 		if fileCfg.CryptoKey != nil && !isFlagPassedLocal("crypto-key") {
 			cryptoKeyPathVal = *fileCfg.CryptoKey

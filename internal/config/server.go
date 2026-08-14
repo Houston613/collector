@@ -106,9 +106,7 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 			restoreVal = *fileCfg.Restore
 		}
 		if fileCfg.StoreInterval != nil && !isFlagPassedLocal("i") {
-			if val, err := parseDurationOrInt(string(*fileCfg.StoreInterval)); err == nil {
-				storeIntervalVal = val
-			}
+			storeIntervalVal = int(*fileCfg.StoreInterval)
 		}
 		if fileCfg.StoreFile != nil && !isFlagPassedLocal("f") {
 			fileStoragePathVal = *fileCfg.StoreFile

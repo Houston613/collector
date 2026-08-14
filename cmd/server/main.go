@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -172,19 +173,22 @@ func run() error {
 		log.Info("HTTP server stopped gracefully")
 	}
 
-	// Save file-backed storage if active
-	if fileStorage, ok := storage.(*repository.FileBackedStorage); ok {
-		if err := fileStorage.Save(); err != nil {
-			log.Error("failed to save metrics to file on shutdown", zap.Error(err))
+	// Save storage state if supported on shutdown
+	if saver, ok := storage.(repository.Saver); ok {
+		if err := saver.Save(); err != nil {
+			log.Error("failed to save metrics on shutdown", zap.Error(err))
 		} else {
-			log.Info("metrics saved to file on shutdown")
+			log.Info("metrics saved on shutdown")
 		}
 	}
 
-	// Close database storage if active
-	if dbStorage, ok := storage.(*repository.DBStorage); ok {
-		dbStorage.Close()
-		log.Info("database storage closed")
+	// Close storage resources if supported on shutdown
+	if closer, ok := storage.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			log.Error("failed to close storage on shutdown", zap.Error(err))
+		} else {
+			log.Info("storage closed gracefully")
+		}
 	}
 
 	return nil
