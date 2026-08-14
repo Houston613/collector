@@ -149,6 +149,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 				assert.Equal(t, http.MethodPost, r.Method)
 				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				assert.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+				assert.NotEmpty(t, r.Header.Get("X-Real-IP"))
 				// Check if request is gzip compressed
 				var reader io.Reader = r.Body
 				if r.Header.Get("Content-Encoding") == "gzip" {

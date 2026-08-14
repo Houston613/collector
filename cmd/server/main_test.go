@@ -24,6 +24,7 @@ func TestParseServerConfig(t *testing.T) {
 		os.Unsetenv("AUDIT_FILE")
 		os.Unsetenv("AUDIT_URL")
 		os.Unsetenv("CRYPTO_KEY")
+		os.Unsetenv("TRUSTED_SUBNET")
 		os.Unsetenv("CONFIG")
 	}
 
@@ -40,6 +41,7 @@ func TestParseServerConfig(t *testing.T) {
 		assert.Equal(t, "", cfg.AuditFilePath)
 		assert.Equal(t, "", cfg.AuditURL)
 		assert.Equal(t, "", cfg.CryptoKeyPath)
+		assert.Equal(t, "", cfg.TrustedSubnet)
 	})
 
 	t.Run("flags override defaults", func(t *testing.T) {
@@ -54,6 +56,7 @@ func TestParseServerConfig(t *testing.T) {
 			"-audit-file", "/tmp/audit.log",
 			"-audit-url", "http://auditor",
 			"-crypto-key", "/tmp/priv.key",
+			"-t", "192.168.1.0/24",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "localhost:9090", cfg.Addr)
@@ -65,6 +68,7 @@ func TestParseServerConfig(t *testing.T) {
 		assert.Equal(t, "/tmp/audit.log", cfg.AuditFilePath)
 		assert.Equal(t, "http://auditor", cfg.AuditURL)
 		assert.Equal(t, "/tmp/priv.key", cfg.CryptoKeyPath)
+		assert.Equal(t, "192.168.1.0/24", cfg.TrustedSubnet)
 	})
 
 	t.Run("config file", func(t *testing.T) {
@@ -82,6 +86,7 @@ func TestParseServerConfig(t *testing.T) {
 			"key":            "jsonkey",
 			"audit_file":     "/tmp/audit.json",
 			"audit_url":      "http://jsonaudit",
+			"trusted_subnet": "10.0.0.0/8",
 		}
 		data, err := json.Marshal(cfgData)
 		require.NoError(t, err)
@@ -99,6 +104,7 @@ func TestParseServerConfig(t *testing.T) {
 		assert.Equal(t, "jsonkey", cfg.Key)
 		assert.Equal(t, "/tmp/audit.json", cfg.AuditFilePath)
 		assert.Equal(t, "http://jsonaudit", cfg.AuditURL)
+		assert.Equal(t, "10.0.0.0/8", cfg.TrustedSubnet)
 	})
 
 	t.Run("flags override config file", func(t *testing.T) {

@@ -136,6 +136,7 @@ func run() error {
 	e := echo.New()
 	// Logger is implemented via middleware
 	e.Use(middleware.RequestLogger(log))
+	e.Use(middleware.TrustedSubnetMiddleware(cfgVal.TrustedSubnet, log))
 	// Order of middleware: decrypt first, then decompress, then sign
 	if privKey != nil {
 		e.Use(middleware.CryptoMiddleware(privKey, log))

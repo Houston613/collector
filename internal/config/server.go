@@ -19,6 +19,7 @@ type ServerConfig struct {
 	Key           *string        `json:"key"`
 	AuditFile     *string        `json:"audit_file"`
 	AuditURL      *string        `json:"audit_url"`
+	TrustedSubnet *string        `json:"trusted_subnet"`
 }
 
 // ServerOptions contains the fully parsed and prioritized configuration options for the server.
@@ -32,6 +33,7 @@ type ServerOptions struct {
 	AuditFilePath   string
 	AuditURL        string
 	CryptoKeyPath   string
+	TrustedSubnet   string
 }
 
 
@@ -50,6 +52,7 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	auditFilePath := fs.String("audit-file", "", "path to audit file (empty to disable file audit)")
 	auditURL := fs.String("audit-url", "", "audit server URL (empty to disable HTTP audit)")
 	cryptoKeyPath := fs.String("crypto-key", "", "path to file with RSA private key")
+	trustedSubnet := fs.String("t", "", "trusted subnet CIDR")
 
 	var configPath string
 	fs.StringVar(&configPath, "c", "", "path to JSON configuration file")
@@ -87,6 +90,7 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	keyVal := *key
 	auditFilePathVal := *auditFilePath
 	auditURLVal := *auditURL
+	trustedSubnetVal := *trustedSubnet
 
 	// Apply configuration file if specified and exists
 	if configPath != "" {
@@ -126,6 +130,9 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 		if fileCfg.AuditURL != nil && !isFlagPassedLocal("audit-url") {
 			auditURLVal = *fileCfg.AuditURL
 		}
+		if fileCfg.TrustedSubnet != nil && !isFlagPassedLocal("t") {
+			trustedSubnetVal = *fileCfg.TrustedSubnet
+		}
 	}
 
 	// Environment variables take precedence over command-line flags and config files
@@ -163,6 +170,9 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	if v := os.Getenv("CRYPTO_KEY"); v != "" {
 		cryptoKeyPathVal = v
 	}
+	if v := os.Getenv("TRUSTED_SUBNET"); v != "" {
+		trustedSubnetVal = v
+	}
 
 	return &ServerOptions{
 		Addr:            addrVal,
@@ -174,5 +184,6 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 		AuditFilePath:   auditFilePathVal,
 		AuditURL:        auditURLVal,
 		CryptoKeyPath:   cryptoKeyPathVal,
+		TrustedSubnet:   trustedSubnetVal,
 	}, nil
 }

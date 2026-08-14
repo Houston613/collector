@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ type Agent struct {
 	cryptoKey       *rsa.PublicKey
 	rateLimit       int
 	client          *http.Client
+	hostIP          string
 	log             *zap.Logger
 }
 
@@ -62,6 +64,7 @@ func NewAgent(addr string, pollInterval, reportInterval time.Duration, key strin
 		cryptoKey:       cryptoKey,
 		rateLimit:       rateLimit,
 		client:          &http.Client{},
+		hostIP:          getLocalIP(addr),
 		// Add logger to agent struct to log metric transmission errors
 		log: log,
 	}
@@ -206,6 +209,9 @@ func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
 		req.Header.Set("Accept-Encoding", "gzip")
+		if a.hostIP != "" {
+			req.Header.Set("X-Real-IP", a.hostIP)
+		}
 
 		if a.key != "" {
 			hash := signature.Sign(body, a.key)
@@ -278,3 +284,28 @@ func (a *Agent) Run(ctx context.Context) {
 	wg.Wait()
 	a.log.Info("all agent workers finished, shutdown complete")
 }
+
+func getLocalIP(serverAddr string) string {
+	target := strings.TrimPrefix(serverAddr, "http://")
+	target = strings.TrimPrefix(target, "https://")
+	if target == "" {
+		return "127.0.0.1"
+	}
+	if !strings.Contains(target, ":") {
+		target += ":80"
+	}
+
+	conn, err := net.Dial("udp", target)
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || localAddr.IP == nil {
+		return "127.0.0.1"
+	}
+
+	return localAddr.IP.String()
+}
+
