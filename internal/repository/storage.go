@@ -20,6 +20,12 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
+// Saver defines an interface for repositories that can persist their state to storage.
+type Saver interface {
+	Save() error
+}
+
+
 // MemRepository defines the set of methods required to read and write metrics.
 type MemRepository interface {
 	// UpdateGauge updates the value of a gauge metric by its name.
