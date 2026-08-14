@@ -20,6 +20,7 @@ func TestParseAgentConfig(t *testing.T) {
 		os.Unsetenv("KEY")
 		os.Unsetenv("RATE_LIMIT")
 		os.Unsetenv("CRYPTO_KEY")
+		os.Unsetenv("GRPC_ADDRESS")
 		os.Unsetenv("CONFIG")
 	}
 
@@ -33,6 +34,7 @@ func TestParseAgentConfig(t *testing.T) {
 		assert.Equal(t, "", cfg.Key)
 		assert.Equal(t, 3, cfg.RateLimit)
 		assert.Equal(t, "", cfg.CryptoKeyPath)
+		assert.Equal(t, "", cfg.GrpcAddress)
 	})
 
 	t.Run("flags override defaults", func(t *testing.T) {
@@ -44,6 +46,7 @@ func TestParseAgentConfig(t *testing.T) {
 			"-k", "mykey",
 			"-l", "10",
 			"-crypto-key", "/tmp/pub.key",
+			"-g", "localhost:3200",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "localhost:9090", cfg.Addr)
@@ -52,6 +55,7 @@ func TestParseAgentConfig(t *testing.T) {
 		assert.Equal(t, "mykey", cfg.Key)
 		assert.Equal(t, 10, cfg.RateLimit)
 		assert.Equal(t, "/tmp/pub.key", cfg.CryptoKeyPath)
+		assert.Equal(t, "localhost:3200", cfg.GrpcAddress)
 	})
 
 	t.Run("config file", func(t *testing.T) {

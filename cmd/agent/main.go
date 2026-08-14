@@ -65,6 +65,11 @@ func run() error {
 		log,
 	)
 
+	if cfgVal.GrpcAddress != "" {
+		a.SetGrpcAddress(cfgVal.GrpcAddress)
+		log.Info("gRPC reporting enabled", zap.String("grpc_addr", cfgVal.GrpcAddress))
+	}
+
 	// Listen for SIGINT, SIGTERM, SIGQUIT signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)

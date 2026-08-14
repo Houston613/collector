@@ -20,6 +20,7 @@ type ServerConfig struct {
 	AuditFile     *string        `json:"audit_file"`
 	AuditURL      *string        `json:"audit_url"`
 	TrustedSubnet *string        `json:"trusted_subnet"`
+	GrpcAddress   *string        `json:"grpc_address"`
 }
 
 // ServerOptions contains the fully parsed and prioritized configuration options for the server.
@@ -34,6 +35,7 @@ type ServerOptions struct {
 	AuditURL        string
 	CryptoKeyPath   string
 	TrustedSubnet   string
+	GrpcAddress     string
 }
 
 
@@ -53,6 +55,7 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	auditURL := fs.String("audit-url", "", "audit server URL (empty to disable HTTP audit)")
 	cryptoKeyPath := fs.String("crypto-key", "", "path to file with RSA private key")
 	trustedSubnet := fs.String("t", "", "trusted subnet CIDR")
+	grpcAddress := fs.String("g", "", "gRPC server address (e.g. :3200)")
 
 	var configPath string
 	fs.StringVar(&configPath, "c", "", "path to JSON configuration file")
@@ -91,6 +94,7 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	auditFilePathVal := *auditFilePath
 	auditURLVal := *auditURL
 	trustedSubnetVal := *trustedSubnet
+	grpcAddressVal := *grpcAddress
 
 	// Apply configuration file if specified and exists
 	if configPath != "" {
@@ -133,6 +137,9 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 		if fileCfg.TrustedSubnet != nil && !isFlagPassedLocal("t") {
 			trustedSubnetVal = *fileCfg.TrustedSubnet
 		}
+		if fileCfg.GrpcAddress != nil && !isFlagPassedLocal("g") {
+			grpcAddressVal = *fileCfg.GrpcAddress
+		}
 	}
 
 	// Environment variables take precedence over command-line flags and config files
@@ -173,6 +180,9 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 	if v := os.Getenv("TRUSTED_SUBNET"); v != "" {
 		trustedSubnetVal = v
 	}
+	if v := os.Getenv("GRPC_ADDRESS"); v != "" {
+		grpcAddressVal = v
+	}
 
 	return &ServerOptions{
 		Addr:            addrVal,
@@ -185,5 +195,6 @@ func ParseServerConfig(args []string) (*ServerOptions, error) {
 		AuditURL:        auditURLVal,
 		CryptoKeyPath:   cryptoKeyPathVal,
 		TrustedSubnet:   trustedSubnetVal,
+		GrpcAddress:     grpcAddressVal,
 	}, nil
 }

@@ -180,7 +180,7 @@ func TestMetricsSendBatch_JSONFormat(t *testing.T) {
 			jobs := make(chan []models.Metrics, 1)
 			a.MetricsSend(jobs)
 			m := <-jobs
-			require.NoError(t, a.sendBatchJSON(m))
+			require.NoError(t, a.sender.Send(context.Background(), m))
 
 			assert.Contains(t, received, tt.want)
 		})
@@ -224,7 +224,7 @@ func TestAgentAsymmetricEncryption(t *testing.T) {
 	jobs := make(chan []models.Metrics, 1)
 	a.MetricsSend(jobs)
 	m := <-jobs
-	require.NoError(t, a.sendBatchJSON(m))
+	require.NoError(t, a.sender.Send(context.Background(), m))
 
 	require.Len(t, received, 1)
 	assert.Equal(t, "EncryptedMetric", received[0].ID)

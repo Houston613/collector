@@ -3,8 +3,10 @@ package main
 import (
 	"collector/internal/audit"
 	"collector/internal/config"
+	"collector/internal/grpcserver"
 	"collector/internal/handler"
 	"collector/internal/middleware"
+	pb "collector/internal/proto/gen"
 	"collector/internal/repository"
 	"collector/internal/version"
 	"collector/pkg/crypto"
@@ -12,11 +14,14 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"google.golang.org/grpc"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -148,6 +153,26 @@ func run() error {
 	metricsHandler := handler.NewMetricsHandler(storage, cfgVal.DbDSN, auditor, log)
 	metricsHandler.RegisterRoutes(e)
 
+	var grpcServer *grpc.Server
+	if cfgVal.GrpcAddress != "" {
+		lis, err := net.Listen("tcp", cfgVal.GrpcAddress)
+		if err != nil {
+			return fmt.Errorf("failed to listen on gRPC address %s: %w", cfgVal.GrpcAddress, err)
+		}
+
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(grpcserver.TrustedSubnetInterceptor(cfgVal.TrustedSubnet, log)),
+		)
+		pb.RegisterMetricsServer(grpcServer, grpcserver.NewMetricsServer(storage, log))
+
+		go func() {
+			log.Info("starting gRPC server", zap.String("addr", cfgVal.GrpcAddress))
+			if err := grpcServer.Serve(lis); err != nil {
+				log.Error("gRPC server stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
 	// Listen for SIGINT, SIGTERM, SIGQUIT signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
@@ -172,6 +197,11 @@ func run() error {
 		log.Error("failed to gracefully shutdown HTTP server", zap.Error(err))
 	} else {
 		log.Info("HTTP server stopped gracefully")
+	}
+
+	if grpcServer != nil {
+		grpcServer.GracefulStop()
+		log.Info("gRPC server stopped gracefully")
 	}
 
 	// Save storage state if supported on shutdown

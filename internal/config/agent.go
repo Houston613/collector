@@ -16,6 +16,7 @@ type AgentConfig struct {
 	CryptoKey      *string        `json:"crypto_key"`
 	Key            *string        `json:"key"`
 	RateLimit      *int           `json:"rate_limit"`
+	GrpcAddress    *string        `json:"grpc_address"`
 }
 
 type AgentOptions struct {
@@ -25,6 +26,7 @@ type AgentOptions struct {
 	Key            string
 	RateLimit      int
 	CryptoKeyPath  string
+	GrpcAddress    string
 }
 
 
@@ -40,6 +42,7 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 	key := fs.String("k", "", "key for data signing")
 	rateLimit := fs.Int("l", 3, "rate limit for outgoing concurrent requests")
 	cryptoKeyPath := fs.String("crypto-key", "", "path to file with RSA public key")
+	grpcAddress := fs.String("g", "", "gRPC server address (e.g. localhost:3200)")
 
 	var configPath string
 	fs.StringVar(&configPath, "c", "", "path to JSON configuration file")
@@ -73,6 +76,7 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 	cryptoKeyPathVal := *cryptoKeyPath
 	keyVal := *key
 	rateLimitVal := *rateLimit
+	grpcAddressVal := *grpcAddress
 
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
@@ -102,6 +106,9 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 		if fileCfg.RateLimit != nil && !isFlagPassedLocal("l") {
 			rateLimitVal = *fileCfg.RateLimit
 		}
+		if fileCfg.GrpcAddress != nil && !isFlagPassedLocal("g") {
+			grpcAddressVal = *fileCfg.GrpcAddress
+		}
 	}
 
 	// Environment variables take precedence over command-line flags and config files
@@ -129,6 +136,9 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 	if envCryptoKey := os.Getenv("CRYPTO_KEY"); envCryptoKey != "" {
 		cryptoKeyPathVal = envCryptoKey
 	}
+	if envGrpcAddress := os.Getenv("GRPC_ADDRESS"); envGrpcAddress != "" {
+		grpcAddressVal = envGrpcAddress
+	}
 
 	return &AgentOptions{
 		Addr:           addrVal,
@@ -137,5 +147,6 @@ func ParseAgentConfig(args []string) (*AgentOptions, error) {
 		Key:            keyVal,
 		RateLimit:      rateLimitVal,
 		CryptoKeyPath:  cryptoKeyPathVal,
+		GrpcAddress:    grpcAddressVal,
 	}, nil
 }
