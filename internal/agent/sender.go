@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -124,6 +125,7 @@ func (s *HTTPSender) Close() error {
 type GRPCSender struct {
 	grpcAddr   string
 	hostIP     string
+	mu         sync.Mutex
 	grpcConn   *grpc.ClientConn
 	grpcClient pb.MetricsClient
 	log        *zap.Logger
@@ -138,15 +140,28 @@ func NewGRPCSender(grpcAddr, hostIP string, log *zap.Logger) *GRPCSender {
 	}
 }
 
+func (s *GRPCSender) getClient() (pb.MetricsClient, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.grpcClient != nil {
+		return s.grpcClient, nil
+	}
+
+	conn, err := grpc.NewClient(s.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to gRPC server %s: %w", s.grpcAddr, err)
+	}
+	s.grpcConn = conn
+	s.grpcClient = pb.NewMetricsClient(conn)
+	return s.grpcClient, nil
+}
+
 // Send serializes and ships a batch of metrics using gRPC.
 func (s *GRPCSender) Send(ctx context.Context, metrics []models.Metrics) error {
-	if s.grpcClient == nil {
-		conn, err := grpc.NewClient(s.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("failed to connect to gRPC server %s: %w", s.grpcAddr, err)
-		}
-		s.grpcConn = conn
-		s.grpcClient = pb.NewMetricsClient(conn)
+	client, err := s.getClient()
+	if err != nil {
+		return err
 	}
 
 	pbMetrics := make([]*pb.Metric, 0, len(metrics))
@@ -169,7 +184,7 @@ func (s *GRPCSender) Send(ctx context.Context, metrics []models.Metrics) error {
 
 	return retry.Do(ctx, func() error {
 		reqCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("x-real-ip", s.hostIP))
-		_, err := s.grpcClient.UpdateMetrics(reqCtx, &pb.UpdateMetricsRequest{Metrics: pbMetrics})
+		_, err := client.UpdateMetrics(reqCtx, &pb.UpdateMetricsRequest{Metrics: pbMetrics})
 		return err
 	}, func(err error) bool {
 		st, ok := status.FromError(err)
@@ -183,8 +198,14 @@ func (s *GRPCSender) Send(ctx context.Context, metrics []models.Metrics) error {
 
 // Close closes the gRPC connection if active.
 func (s *GRPCSender) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.grpcConn != nil {
-		return s.grpcConn.Close()
+		err := s.grpcConn.Close()
+		s.grpcConn = nil
+		s.grpcClient = nil
+		return err
 	}
 	return nil
 }

@@ -296,3 +296,29 @@ func TestAgentGracefulShutdown(t *testing.T) {
 	}
 	assert.True(t, found, "expected final metric to be sent during shutdown")
 }
+
+func TestGRPCSender_ConcurrentSend(t *testing.T) {
+	sender := NewGRPCSender("localhost:50051", "127.0.0.1", zap.NewNop())
+	defer sender.Close()
+
+	var wg sync.WaitGroup
+	metrics := []models.Metrics{
+		{
+			ID:    "TestGauge",
+			MType: models.Gauge,
+			Value: func() *float64 { v := 1.23; return &v }(),
+		},
+	}
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			_ = sender.Send(ctx, metrics)
+		}()
+	}
+
+	wg.Wait()
+}

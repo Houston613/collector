@@ -113,4 +113,41 @@ func TestGRPCMetricsServer(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, codes.PermissionDenied, st.Code())
 	})
+
+	t.Run("invalid metric type returns InvalidArgument", func(t *testing.T) {
+		ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-real-ip", "192.168.1.100"))
+		req := &pb.UpdateMetricsRequest{
+			Metrics: []*pb.Metric{
+				{
+					Id:   "badMetric",
+					Type: pb.Metric_MType(999),
+				},
+			},
+		}
+
+		_, err := client.UpdateMetrics(ctx, req)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		assert.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("empty metric ID returns InvalidArgument", func(t *testing.T) {
+		ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-real-ip", "192.168.1.100"))
+		req := &pb.UpdateMetricsRequest{
+			Metrics: []*pb.Metric{
+				{
+					Id:    "",
+					Type:  pb.Metric_GAUGE,
+					Value: 5.0,
+				},
+			},
+		}
+
+		_, err := client.UpdateMetrics(ctx, req)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		assert.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
 }
