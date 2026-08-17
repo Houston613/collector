@@ -228,11 +228,14 @@ func getLocalIP(serverAddr string) string {
 	if target == "" {
 		return "127.0.0.1"
 	}
-	if !strings.Contains(target, ":") {
-		target += ":80"
+
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		host = target
+		port = "80"
 	}
 
-	conn, err := net.Dial("udp", target)
+	conn, err := net.Dial("udp", net.JoinHostPort(host, port))
 	if err != nil {
 		return "127.0.0.1"
 	}

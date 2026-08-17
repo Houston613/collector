@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"collector/pkg/netutil"
 	"context"
 	"fmt"
 	"net"
@@ -17,7 +18,7 @@ func TrustedSubnetInterceptor(trustedSubnet string, log *zap.Logger) grpc.UnaryS
 	var subnet *net.IPNet
 	if trustedSubnet != "" {
 		var err error
-		subnet, err = parseSubnet(trustedSubnet)
+		subnet, err = netutil.ParseSubnet(trustedSubnet)
 		if err != nil && log != nil {
 			log.Error("failed to parse trusted_subnet for gRPC interceptor", zap.String("subnet", trustedSubnet), zap.Error(err))
 		}
@@ -45,21 +46,4 @@ func TrustedSubnetInterceptor(trustedSubnet string, log *zap.Logger) grpc.UnaryS
 
 		return handler(ctx, req)
 	}
-}
-
-func parseSubnet(s string) (*net.IPNet, error) {
-	_, subnet, err := net.ParseCIDR(s)
-	if err == nil {
-		return subnet, nil
-	}
-	ip := net.ParseIP(s)
-	if ip != nil {
-		if ip.To4() != nil {
-			_, subnet, err = net.ParseCIDR(s + "/32")
-			return subnet, err
-		}
-		_, subnet, err = net.ParseCIDR(s + "/128")
-		return subnet, err
-	}
-	return nil, err
 }

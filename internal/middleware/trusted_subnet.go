@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"collector/pkg/netutil"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,7 +20,7 @@ func TrustedSubnetMiddleware(trustedSubnet string, log *zap.Logger) echo.Middlew
 			return next
 		}
 
-		subnet, err := parseSubnet(trustedSubnet)
+		subnet, err := netutil.ParseSubnet(trustedSubnet)
 		if err != nil && log != nil {
 			log.Error("failed to parse trusted_subnet CIDR", zap.String("subnet", trustedSubnet), zap.Error(err))
 		}
@@ -42,21 +43,4 @@ func TrustedSubnetMiddleware(trustedSubnet string, log *zap.Logger) echo.Middlew
 			return next(c)
 		}
 	}
-}
-
-func parseSubnet(s string) (*net.IPNet, error) {
-	_, subnet, err := net.ParseCIDR(s)
-	if err == nil {
-		return subnet, nil
-	}
-	ip := net.ParseIP(s)
-	if ip != nil {
-		if ip.To4() != nil {
-			_, subnet, err = net.ParseCIDR(s + "/32")
-			return subnet, err
-		}
-		_, subnet, err = net.ParseCIDR(s + "/128")
-		return subnet, err
-	}
-	return nil, err
 }
