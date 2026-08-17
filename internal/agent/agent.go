@@ -1,23 +1,17 @@
 package agent
 
 import (
-	"bytes"
-	"collector/pkg/retry"
-	"compress/gzip"
+	models "collector/internal/model"
 	"context"
-	"encoding/json"
-	"errors"
+	"crypto/rsa"
 	"fmt"
 	"maps"
 	"math/rand"
 	"net"
-	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
-
-	models "collector/internal/model"
-	"collector/pkg/signature"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
@@ -38,28 +32,37 @@ type Agent struct {
 	mu              sync.RWMutex
 	gaugesMetrics   map[string]float64
 	countersMetrics map[string]int64
-	addr            string
 	pollInterval    time.Duration
 	reportInterval  time.Duration
-	key             string
 	rateLimit       int
-	client          *http.Client
+	sender          MetricsSender
 	log             *zap.Logger
 }
 
-// NewAgent creates and configures a new metrics Agent.
-func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, rateLimit int, log *zap.Logger) *Agent {
+// SetGrpcAddress configures the agent to use gRPC for sending metrics.
+func (a *Agent) SetGrpcAddress(grpcAddr string) {
+	hostIP := getLocalIP(grpcAddr)
+	a.sender = NewGRPCSender(grpcAddr, hostIP, a.log)
+}
+
+// SetSender sets a custom MetricsSender implementation (useful for tests or custom transports).
+func (a *Agent) SetSender(sender MetricsSender) {
+	a.sender = sender
+}
+
+// NewAgent creates and configures a new metrics Agent using HTTP by default.
+func NewAgent(addr string, pollInterval, reportInterval time.Duration, key string, cryptoKey *rsa.PublicKey, rateLimit int, log *zap.Logger) *Agent {
+	hostIP := getLocalIP(addr)
+	sender := NewHTTPSender(addr, key, cryptoKey, hostIP, log)
+
 	return &Agent{
 		gaugesMetrics:   make(map[string]float64),
 		countersMetrics: make(map[string]int64),
-		addr:            addr,
 		pollInterval:    pollInterval,
 		reportInterval:  reportInterval,
-		key:             key,
 		rateLimit:       rateLimit,
-		client:          &http.Client{},
-		// Add logger to agent struct to log metric transmission errors
-		log: log,
+		sender:          sender,
+		log:             log,
 	}
 }
 
@@ -130,7 +133,6 @@ func (a *Agent) MetricsCollectGopsutil() {
 
 // MetricsSend packages all gathered metrics and writes them to the jobs channel for shipping.
 func (a *Agent) MetricsSend(jobs chan<- []models.Metrics) {
-	// Copy metrics under RLock to prevent holding the lock during HTTP transmission
 	a.mu.RLock()
 	gauges := make(map[string]float64, len(a.gaugesMetrics))
 	maps.Copy(gauges, a.gaugesMetrics)
@@ -159,94 +161,90 @@ func (a *Agent) MetricsSend(jobs chan<- []models.Metrics) {
 
 func (a *Agent) worker(jobs <-chan []models.Metrics) {
 	for metrics := range jobs {
-		if err := a.sendBatchJSON(metrics); err != nil {
-			a.log.Error("error sending batch", zap.Error(err))
+		if err := a.sender.Send(context.Background(), metrics); err != nil {
+			a.log.Error("error sending metrics batch", zap.Error(err))
 		}
 	}
-}
-
-func (a *Agent) sendBatchJSON(metrics []models.Metrics) error {
-	body, err := json.Marshal(metrics)
-	if err != nil {
-		return fmt.Errorf("marshal batch: %w", err)
-	}
-	// Compress the payload
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return fmt.Errorf("gzip writer: %w", err)
-	}
-	if _, err = gz.Write(body); err != nil {
-		return fmt.Errorf("gzip write: %w", err)
-	}
-	if err = gz.Close(); err != nil {
-		return fmt.Errorf("gzip close: %w", err)
-	}
-
-	compressedData := buf.Bytes()
-
-	return retry.Do(context.Background(), func() error {
-		req, err := http.NewRequest(http.MethodPost, a.addr+"/updates/", bytes.NewReader(compressedData))
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Content-Encoding", "gzip")
-		req.Header.Set("Accept-Encoding", "gzip")
-
-		if a.key != "" {
-			hash := signature.Sign(body, a.key)
-			req.Header.Set("HashSHA256", hash)
-		}
-
-		resp, err := a.client.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("server error: %d", resp.StatusCode)
-		}
-
-		return nil
-	}, func(err error) bool {
-		var netErr net.Error
-		return errors.As(err, &netErr)
-	})
 }
 
 // Run starts the agent's main loops for collecting and sending metrics.
-func (a *Agent) Run() {
+// It runs until the context is cancelled, after which it performs a final report
+// and waits for all outgoing workers to complete.
+func (a *Agent) Run(ctx context.Context) {
 	jobs := make(chan []models.Metrics, a.rateLimit)
+	var wg sync.WaitGroup
 
 	// Workers for sending metrics
 	for i := 0; i < a.rateLimit; i++ {
-		go a.worker(jobs)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.worker(jobs)
+		}()
 	}
 
-	// Collect metrics
-	go func() {
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			a.MetricsCollect()
+	pollTicker := time.NewTicker(a.pollInterval)
+	defer pollTicker.Stop()
+
+	reportTicker := time.NewTicker(a.reportInterval)
+	defer reportTicker.Stop()
+
+	// Run collection and reporting loop
+	func() {
+		for {
+			select {
+			case <-ctx.Done():
+				a.log.Info("agent received cancellation, stopping...")
+				return
+			case <-pollTicker.C:
+				a.MetricsCollect()
+				a.MetricsCollectGopsutil()
+			case <-reportTicker.C:
+				a.MetricsSend(jobs)
+			}
 		}
 	}()
 
-	// Collect gopsutil metrics
-	go func() {
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			a.MetricsCollectGopsutil()
-		}
-	}()
+	// Trigger one final metrics send of whatever is currently collected
+	a.log.Info("sending final batch of metrics before shutdown...")
+	a.MetricsSend(jobs)
 
-	// Send metrics periodically
-	ticker := time.NewTicker(a.reportInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		a.MetricsSend(jobs)
+	// Close jobs channel to signal workers to drain and exit
+	close(jobs)
+
+	// Wait for all workers to finish sending remaining metrics
+	wg.Wait()
+	if a.sender != nil {
+		if err := a.sender.Close(); err != nil {
+			a.log.Error("failed to close metrics sender on shutdown", zap.Error(err))
+		}
 	}
+	a.log.Info("all agent workers finished, shutdown complete")
+}
+
+func getLocalIP(serverAddr string) string {
+	target := strings.TrimPrefix(serverAddr, "http://")
+	target = strings.TrimPrefix(target, "https://")
+	if target == "" {
+		return "127.0.0.1"
+	}
+
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		host = target
+		port = "80"
+	}
+
+	conn, err := net.Dial("udp", net.JoinHostPort(host, port))
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || localAddr.IP == nil {
+		return "127.0.0.1"
+	}
+
+	return localAddr.IP.String()
 }
